@@ -36,12 +36,28 @@ import {
   readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync,
   openSync, fstatSync, readSync, closeSync, realpathSync, statSync,
 } from 'fs';
+import { createHash } from 'crypto';
 import { dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { withPipelineLock } from './pipeline-lock.mjs';
 import { writeFileAtomic } from './tracker-utils.mjs';
 import { localToday } from './lib/local-today.mjs';
+import { loadYaml } from './lib/yaml-document.mjs';
+import { isMainModule } from './lib/is-main-module.mjs';
+import { getProfilePath } from './path-resolver.mjs';
+import {
+  loadApprovalCategories, mintApprovalId, serializeInboxLine,
+  parseInboxText, assertBatchApprovable, assertLedgerRowLegal,
+} from './lib/approval-schema.mjs';
+import { resolveApprovalLogPath, appendApprovalRows, readApprovalLog } from './lib/approval-log.mjs';
+import { scorePosting, fitTargetsFromProfile } from './lib/inbox-rank.mjs';
 
 const PATH = process.env.CAREER_OPS_INBOX || 'data/agent-inbox.md';
+
+// The GENERAL lane is not one of the six approval categories; its ordering
+// weight lives in approval-categories.yml (general_lane.weight: 50). It is a
+// legacy intent-to-run, not a human-approval gate, so it carries no ledger row.
+const GENERAL_WEIGHT = 50;
 
 const HEADER = [
   '# Agent Inbox',
@@ -166,6 +182,9 @@ function optAll(name) {
 }
 
 async function add() {
+  // `add --category <cat> ...` is the documented producer interface (design §6);
+  // it queues a categorized approval item through the same path as `enqueue`.
+  if (process.argv.includes('--category')) return enqueue();
   const text = oneLine(process.argv.slice(3).join(' '));
   if (!text) fail('add needs a request, e.g. node agent-inbox.mjs add "evaluate https://..."');
   // Append rather than rewrite. This is the queue's concurrent path — anything
@@ -224,6 +243,12 @@ async function add() {
 }
 
 function list() {
+  // Opt-in approval-queue view. Bare `list` / `list --all` keep the legacy
+  // output byte-identical (regression-guarded) so every existing caller and
+  // test is unaffected.
+  if (process.argv.includes('--grouped') || process.argv.includes('--category')) {
+    return listGrouped();
+  }
   const all = process.argv.includes('--all');
   const parsed = parseItems();
   const items = parsed.filter((it) => all || !it.done);
@@ -300,6 +325,309 @@ async function resolve() {
   process.stdout.write(`Resolved #${n}: ${outcome.target.text}\n`);
 }
 
+// ───────────────────────── approval queue (AGEN-203) ─────────────────────────
+//
+// A thin categorized/prioritized layer over the same append-only checklist.
+// Every disposition is recorded in an append-only provenance ledger
+// (lib/approval-log.mjs), the mirror of set-status.mjs → status-log.tsv. See
+// docs/designs/APPROVAL_QUEUE_DESIGN.md.
+
+// The canonical taxonomy ships beside this file; an env override lets tests and
+// relocations point elsewhere. Loaded once, then cached.
+let CATS = null;
+function categoriesPath() {
+  return process.env.CAREER_OPS_APPROVAL_CATEGORIES
+    || fileURLToPath(new URL('./templates/approval-categories.yml', import.meta.url));
+}
+function loadCats() {
+  if (!CATS) CATS = loadApprovalCategories(categoriesPath());
+  return CATS;
+}
+
+// Flags that consume the following token as their value; used when separating
+// positional free text (a headline) and item numbers from flags in argv.
+const VALUE_FLAGS = new Set(['category', 'ref', 'sink', 'producer', 'note', 'result', 'expect']);
+
+// Everything on the command line that is not a flag or a flag value, joined —
+// the free-text headline for `enqueue`.
+function positionalFreeText(from = 3) {
+  const parts = [];
+  for (let i = from; i < process.argv.length; i++) {
+    const a = process.argv[i];
+    if (a.startsWith('--')) {
+      const next = process.argv[i + 1];
+      if (VALUE_FLAGS.has(a.slice(2)) && next !== undefined && !next.startsWith('--')) i++;
+      continue;
+    }
+    parts.push(a);
+  }
+  return oneLine(parts.join(' '));
+}
+
+// The 1-based item numbers on the command line (for a disposition), skipping
+// flags and their values.
+function collectNums() {
+  const out = [];
+  for (let i = 3; i < process.argv.length; i++) {
+    const a = process.argv[i];
+    if (a.startsWith('--')) {
+      const next = process.argv[i + 1];
+      if (VALUE_FLAGS.has(a.slice(2)) && next !== undefined && !next.startsWith('--')) i++;
+      continue;
+    }
+    const n = Number(a);
+    if (Number.isInteger(n) && n >= 1) out.push(n);
+  }
+  return out;
+}
+
+// parseItems() captures the whole free-text field after `- [ ] `, which still
+// carries the leading `<stamp> — ` both legacy items and serializeInboxLine
+// write. parseInboxText expects the text WITHOUT that prefix, so strip it first.
+const STAMP_PREFIX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*—\s*/u;
+function parseItemText(text) {
+  return parseInboxText(String(text == null ? '' : text).replace(STAMP_PREFIX, ''));
+}
+
+// sha256 of the exact bytes behind a ref, when the ref is a readable file;
+// otherwise `-`. A report number or tracker # is not a file, so it hashes to `-`.
+function shaOfRefMaybe(ref) {
+  if (!ref || ref === '-') return '-';
+  try {
+    if (!existsSync(ref) || !statSync(ref).isFile()) return '-';
+    return createHash('sha256').update(readFileSync(ref)).digest('hex');
+  } catch { return '-'; }
+}
+
+// The one disposition each category allows for a given CLI action. Validated
+// against the category's own `resolutions` set before anything is written.
+function resolutionFor(category, action) {
+  switch (action) {
+    case 'snooze': return 'deferred';
+    case 'edit': return 'edited';
+    case 'approve':
+      if (category === 'submit') return 'self-submitted'; // the system never submits
+      if (category === 'borderline') return 'pursue';
+      return 'approved';
+    case 'reject':
+      return category === 'borderline' ? 'discard' : 'rejected';
+    default:
+      throw new Error(`unknown disposition '${action}'`);
+  }
+}
+
+const DISPOSITION_LABEL = {
+  approve: 'Approved', 'batch-approve': 'Approved', edit: 'Edited',
+  reject: 'Rejected', snooze: 'Snoozed',
+};
+
+// Queue a categorized approval item: an inbox line (parseable back to its
+// category/id/ref/sink) plus a `queued` ledger row (actor=agent), committed
+// together under the inbox lock.
+async function enqueue() {
+  const cats = loadCats();
+  const category = (opt('category') || '').toLowerCase();
+  if (!cats.has(category)) {
+    fail(`enqueue needs --category <one of: ${[...cats.keys()].join(', ')}>, got ${JSON.stringify(opt('category') || '(none)')}`);
+  }
+  const headline = positionalFreeText();
+  if (!headline) {
+    fail('enqueue needs a headline, e.g. node agent-inbox.mjs enqueue --category resume --ref output/cv.pdf "Acme — Senior MLE"');
+  }
+  const catRow = cats.get(category);
+  const ref = opt('ref') || '-';
+  const sink = opt('sink') || catRow.sink || 'none';
+  const producer = opt('producer') || '-';
+  const note = oneLine(opt('note'));
+  const id = mintApprovalId();
+  const sha = shaOfRefMaybe(ref);
+  const queuedAt = stamp();
+  const line = serializeInboxLine({ id, category, headline, ref, sink, queuedAt });
+  const logPath = resolveApprovalLogPath(PATH);
+
+  await withPipelineLock(PATH, () => {
+    ensureFile();
+    const separator = needsLeadingNewline(PATH) ? '\n' : '';
+    appendFileSync(PATH, `${separator}${line}\n`);
+    appendApprovalRows(logPath, [{
+      id, ts: queuedAt, event: 'queued', category, producer, sink, ref, sha, actor: 'agent', note,
+    }]);
+  }, { timeoutMs: 30_000 });
+
+  process.stdout.write(`Queued [${category.toUpperCase()}] ${headline} {id=${id}}\n`);
+}
+
+// Clear one or more items. approve/edit/reject tick the item and append an
+// actor=user ledger event; snooze records `deferred` and leaves the item
+// pending. A multi-item path (or `batch-approve`) refuses if any item is SUBMIT
+// (invariant 2). General-lane items tick but write no ledger row.
+async function disposition(action) {
+  const nums = collectNums();
+  if (!nums.length) fail(`${action} needs at least one item number (see \`list\`)`);
+  const note = oneLine(opt('note'));
+  const logPath = resolveApprovalLogPath(PATH);
+  const cats = loadCats();
+
+  const outcome = await withPipelineLock(PATH, () => {
+    const items = parseItems();
+    const picked = [];
+    for (const n of nums) {
+      const target = items[n - 1];
+      if (!target) return { error: `no item #${n} — inbox has ${items.length} item(s). Run \`list --all\`.` };
+      if (target.done) return { error: `item #${n} is already resolved — refusing to overwrite it:\n  #${n}: ${target.text}` };
+      picked.push({ n, target, parsed: parseItemText(target.text) });
+    }
+
+    const multiSelect = action === 'batch-approve' || nums.length > 1;
+    const act = action === 'batch-approve' ? 'approve' : action;
+
+    try {
+      if (multiSelect) {
+        assertBatchApprovable(picked.map((p) => ({ id: p.parsed.id, category: p.parsed.category })));
+      }
+
+      // Build + validate every ledger row BEFORE touching either file, so an
+      // illegal combination fails loudly with nothing written.
+      const rows = [];
+      for (const { n, parsed } of picked) {
+        const category = parsed.category;
+        if (category === 'general') continue; // legacy intent — ticks, no ledger
+        const catRow = cats.get(category);
+        if (!catRow) throw new Error(`item #${n} has an unknown category '${category}'`);
+        const resolution = resolutionFor(category, act);
+        if (!catRow.resolutions.includes(resolution)) {
+          throw new Error(`'${act}' is not allowed for ${category.toUpperCase()} (allowed: ${catRow.resolutions.join(', ')})`);
+        }
+        const prior = latestLedgerRow(logPath, parsed.id);
+        const row = {
+          id: parsed.id || mintApprovalId(),
+          ts: stamp(),
+          event: resolution,
+          category,
+          producer: (prior && prior.producer) || '-',
+          sink: (prior && prior.sink) || parsed.meta.sink || catRow.sink || 'none',
+          ref: (prior && prior.ref) || parsed.meta.ref || '-',
+          sha: (prior && prior.sha) || '-',
+          actor: 'user',
+          note,
+        };
+        assertLedgerRowLegal(row);
+        rows.push(row);
+      }
+
+      // snooze never ticks the item — it stays pending by design.
+      if (act !== 'snooze') {
+        const lines = readFileSync(PATH, 'utf8').split('\n');
+        for (const { parsed, target } of picked) {
+          const resolution = resolutionFor(parsed.category, act);
+          let updated = lines[target.line].replace('[ ]', '[x]');
+          if (!/→\s*result:/.test(updated)) updated += ` → result: ${resolution}`;
+          lines[target.line] = updated;
+        }
+        const real = realpathSync(PATH);
+        writeFileAtomic(real, lines.join('\n'), { mode: statSync(real).mode & 0o7777 });
+      }
+
+      if (rows.length) appendApprovalRows(logPath, rows);
+      return { picked };
+    } catch (err) {
+      return { error: err.message };
+    }
+  }, { timeoutMs: 30_000 });
+
+  if (outcome.error) fail(outcome.error);
+  const label = DISPOSITION_LABEL[action] || action;
+  for (const { n, target } of outcome.picked) {
+    process.stdout.write(`${label} #${n}: ${target.text}\n`);
+  }
+}
+
+// The most recent ledger row for an id (producer/sink/ref/sha are inherited
+// from the item's `queued` row so a disposition need not repeat them).
+function latestLedgerRow(logPath, id) {
+  if (!id) return null;
+  let found = null;
+  for (const row of readApprovalLog(logPath)) if (row.id === id) found = row;
+  return found;
+}
+
+function labelForCategory(category, cats) {
+  if (category === 'general') return 'GENERAL';
+  const row = cats.get(category);
+  return (row && row.label) || category.toUpperCase();
+}
+
+function loadProfileMaybe() {
+  try { return loadYaml(readFileSync(getProfilePath(), 'utf8')); } catch { return null; }
+}
+
+/**
+ * Order approval items for display: pending before resolved, then by category
+ * weight (a static tier, NOT a score), then by fit WITHIN a tier via
+ * scorePosting (lib/inbox-rank.mjs — no second ranker), then recency, then a
+ * stable file position. See APPROVAL_QUEUE_DESIGN.md §5.
+ * @param {Array} items  items carrying {num, done, category, headline|text, line}
+ * @param {{profile?: unknown, categories: Map}} ctx
+ */
+export function orderApprovals(items, { profile, categories } = {}) {
+  const cats = categories || loadCats();
+  const targets = fitTargetsFromProfile(profile || {});
+  const weightOf = (category) => {
+    if (category === 'general') return GENERAL_WEIGHT;
+    const row = cats.get(category);
+    return row ? row.weight : 0;
+  };
+  const decorated = items.map((it) => {
+    const headline = it.headline != null ? it.headline : it.text;
+    const fit = scorePosting({ title: headline, location: '', pay: '', rankStamp: '' }, targets);
+    return { it, headline, weight: weightOf(it.category), fit, score: fit ? fit.score : null };
+  });
+  decorated.sort((a, b) => {
+    // Pending before resolved.
+    if (!!a.it.done !== !!b.it.done) return a.it.done ? 1 : -1;
+    // Category weight (higher first) — precedes fit.
+    if (a.weight !== b.weight) return b.weight - a.weight;
+    // Fit within the tier (a null fit sorts after any ranked one).
+    if (a.score !== b.score) {
+      if (a.score == null) return 1;
+      if (b.score == null) return -1;
+      return b.score - a.score;
+    }
+    // Stable file position as the final tiebreak.
+    return (a.it.line ?? a.it.num) - (b.it.line ?? b.it.num);
+  });
+  return decorated.map((d) => d.it);
+}
+
+// Grouped/filtered view of the queue, ordered by orderApprovals. Opt-in; the
+// bare `list` / `list --all` output is untouched.
+function listGrouped() {
+  const all = process.argv.includes('--all');
+  const wantCat = (opt('category') || '').toLowerCase();
+  const cats = loadCats();
+  let items = parseItems()
+    .filter((it) => all || !it.done)
+    .map((it) => ({ ...it, ...parseItemText(it.text) }));
+  if (wantCat) items = items.filter((it) => it.category === wantCat);
+
+  if (!items.length) {
+    if (wantCat) return process.stdout.write(`No ${wantCat.toUpperCase()} items.\n`);
+    return process.stdout.write(all ? 'Inbox is empty.\n' : 'No pending items.\n');
+  }
+
+  const ordered = orderApprovals(items, { profile: loadProfileMaybe(), categories: cats });
+  let current = null;
+  for (const it of ordered) {
+    if (it.category !== current) {
+      current = it.category;
+      process.stdout.write(`\n${labelForCategory(it.category, cats)}\n`);
+    }
+    const head = it.headline || it.text;
+    const meta = it.id ? ` {id=${it.id}}` : '';
+    process.stdout.write(`${String(it.num).padStart(2)}. [${it.done ? 'x' : ' '}] ${head}${meta}\n`);
+  }
+}
+
 function fail(msg) {
   process.stderr.write(`agent-inbox.mjs: ${msg}\n`);
   process.exit(1);
@@ -311,18 +639,44 @@ const USAGE =
   '  node agent-inbox.mjs list [--all]\n' +
   '  node agent-inbox.mjs resolve <n> [--expect "substring"] [--result "..."]\n' +
   '\n' +
+  'Approval queue (AGEN-203):\n' +
+  '  node agent-inbox.mjs enqueue --category <submit|borderline|message|resume|profile|targeting> \\\n' +
+  '        [--ref <report#|path>] [--sink <form-submit|email|linkedin|file|none>] [--producer <mode>] "<headline>"\n' +
+  '        (or `add --category ...` — same thing)\n' +
+  '  node agent-inbox.mjs list [--grouped | --category <cat>] [--all]\n' +
+  '  node agent-inbox.mjs approve <n...> [--note "..."]\n' +
+  '  node agent-inbox.mjs edit <n...>    [--note "..."]\n' +
+  '  node agent-inbox.mjs reject <n...>  [--note "..."]\n' +
+  '  node agent-inbox.mjs snooze <n...>  [--note "..."]   (stays pending, records deferred)\n' +
+  '  node agent-inbox.mjs batch-approve <n...>            (refuses if any item is SUBMIT)\n' +
+  '\n' +
   'Numbers are stable file positions: `list` shows gaps once items are\n' +
   'resolved, and a batch of resolves read off one `list` stays correct.\n' +
-  '--expect aborts unless the target item contains that substring.\n';
+  '--expect aborts unless the target item contains that substring.\n' +
+  'Approving a SUBMIT item records your own "self-submitted" attestation —\n' +
+  'the system never submits or sends anything on your behalf.\n';
 
-const cmd = process.argv[2];
-if (cmd === 'add') await add();
-else if (cmd === 'list') list();
-else if (cmd === 'resolve') await resolve();
-else if (cmd === undefined || cmd === '--help' || cmd === '-h') process.stdout.write(USAGE);
-else {
-  // A word that is not a subcommand (`ad` for `add`) queued nothing, so it must
-  // not exit 0: the callers that check the status read 0 as "queued".
-  process.stderr.write(`agent-inbox.mjs: unknown command "${cmd}"\n${USAGE}`);
-  process.exit(1);
+// isMainModule (lib/is-main-module.mjs) guards the dispatch so tests can import
+// orderApprovals without triggering a CLI run (which would read a test-runner
+// argv and exit), and answers "was I run?" correctly through a symlink (#3170).
+async function main() {
+  const cmd = process.argv[2];
+  if (cmd === 'add') await add();
+  else if (cmd === 'list') list();
+  else if (cmd === 'resolve') await resolve();
+  else if (cmd === 'enqueue') await enqueue();
+  else if (cmd === 'approve') await disposition('approve');
+  else if (cmd === 'edit') await disposition('edit');
+  else if (cmd === 'reject') await disposition('reject');
+  else if (cmd === 'snooze') await disposition('snooze');
+  else if (cmd === 'batch-approve') await disposition('batch-approve');
+  else if (cmd === undefined || cmd === '--help' || cmd === '-h') process.stdout.write(USAGE);
+  else {
+    // A word that is not a subcommand (`ad` for `add`) queued nothing, so it must
+    // not exit 0: the callers that check the status read 0 as "queued".
+    process.stderr.write(`agent-inbox.mjs: unknown command "${cmd}"\n${USAGE}`);
+    process.exit(1);
+  }
 }
+
+if (isMainModule(import.meta.url)) await main();
