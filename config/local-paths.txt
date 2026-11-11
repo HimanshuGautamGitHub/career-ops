@@ -1,0 +1,14 @@
+# local-paths.txt — files this checkout owns, that upstream does not ship.
+#
+# Every path listed here is treated exactly like cv.md: `update-system.mjs
+# apply` never writes to it, and the coverage guard
+# (`validate-system-paths-coverage.mjs`) stops reporting it as an orphan.
+#
+# See config/local-paths.example.txt for the full format and the CI-visibility
+# rule (this file is committed and un-ignored via `!config/local-paths.txt` in
+# .gitignore so forks running the suite in CI do not report these as orphans).
+
+# Fork-safe gap-bridging CLI (AGEN-186, design docs/designs/FORK_SAFE_AUTOMATION.md
+# §4.1). A pure analysis CLI kept at root and declared here so the updater
+# protects it and never collides with a future upstream gap-plan.mjs.
+gap-plan.mjs
