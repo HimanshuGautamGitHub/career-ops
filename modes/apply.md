@@ -390,6 +390,15 @@ errors on a real application, after the step had already been reported as filled
 
 After the final answers are filled into the form or handed to the candidate for copy-paste, update the matched report with an additive `## Application Answers` section. If the candidate later confirms submission, update that same section from `filled` to `submitted`.
 
+**Enqueue the SUBMIT decision (approval queue).** The form is filled but never submitted by the agent — Submit is the candidate's own click (see Scope). Instead of only stopping ad-hoc, record a durable approval item so the decision survives the turn and the candidate can clear it later from `node agent-inbox.mjs list --grouped`:
+
+```bash
+node agent-inbox.mjs enqueue --category submit --ref <report#> --sink form-submit --producer apply \
+  --note "why this fits in one line" "{Company} — {Role}: form filled, awaiting your submit"
+```
+
+This is additive and changes nothing about the prepare-don't-submit flow. **SUBMIT items are never batch-approvable, and approving one records intent only (ledger event `self-submitted`) — it never submits or sends anything.** In an unattended run this replaces the ephemeral `needs_confirmation:` end-state with a queue item that persists; in an interactive run it is the durable twin of the stop-before-submit handoff. Use the `<report#>` of this posting (or the posting URL when there is no report) as `--ref`.
+
 **Write only to the report of this posting (#5854).** Before each write, here and in Step 9, check that the form is still the posting Step 5 confirmed (**Posting identity**). A form can move to another posting after Step 5, for example when "Apply" hands off to another host or the candidate opens a sibling posting. If it no longer matches, stop and ask before writing anything. Otherwise, the target depends on how Steps 3 and 5 ended:
 
 | Case | Where the answers go |

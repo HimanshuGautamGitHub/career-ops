@@ -172,6 +172,15 @@ not quote the note verbatim in a public-facing message.
 - NEVER share phone number
 - The contact type changes the EMPHASIS, not the structure
 
+**Enqueue the MESSAGE decision (approval queue).** The outreach leaves the machine only when the candidate sends it — a stop the agent would otherwise make ad-hoc. Once the message is composed, record it as a durable approval item so the send decision survives the turn:
+
+```bash
+node agent-inbox.mjs enqueue --category message --ref <report#|contact name> --sink linkedin --producer contacto \
+  --note "who it is and why, in one line" "{Company}: {contact} connection request ready to send"
+```
+
+This is additive and never sends: the agent drafts, the candidate sends the connection request or message themselves. Approving the item records the candidate's go-ahead (ledger event `approved`) — it does not connect, message, or transmit anything, and it never logs into LinkedIn.
+
 ---
 
 ## Greeting variant

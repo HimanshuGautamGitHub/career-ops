@@ -55,7 +55,19 @@ If no source was given, ask the user for one.
    markdown to be inserted into `cv.md`, and (for projects) the `article-digest.md`
    block. Flag anything you could not source.
 7. **Confirm gate.** Ask the user to approve, edit, or cancel. Do **not** proceed
-   without an explicit yes.
+   without an explicit yes. When this run is **unattended** (or whenever you want
+   the decision to survive the turn), record a durable approval item instead of
+   only emitting the ephemeral `needs_confirmation:` end-state, so the user can
+   clear it later from `node agent-inbox.mjs list --grouped`:
+
+   ```bash
+   node agent-inbox.mjs enqueue --category profile --ref cv.md --sink file --producer add \
+     --note "what this entry adds, in one line" "Add to CV: {entry title}"
+   ```
+
+   This is additive and writes nothing to `cv.md` / `article-digest.md` on its own
+   — it parks the go/no-go. The write still happens only through Step 8 after the
+   user approves (ledger event `approved`); enqueuing never fabricates or commits a fact.
 8. **Write via the helper.** Build the payload (schema below), write it to
    `/tmp/add-<slug>.json`, then run:
 
