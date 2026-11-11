@@ -615,6 +615,7 @@ export function orderApprovals(items, { profile, categories } = {}) {
 // bare `list` / `list --all` output is untouched.
 function listGrouped() {
   const all = process.argv.includes('--all');
+  const asJson = process.argv.includes('--json');
   const wantCat = (opt('category') || '').toLowerCase();
   const cats = loadCats();
   let items = parseItems()
@@ -622,12 +623,23 @@ function listGrouped() {
     .map((it) => ({ ...it, ...parseItemText(it.text) }));
   if (wantCat) items = items.filter((it) => it.category === wantCat);
 
-  if (!items.length) {
+  const ordered = items.length
+    ? orderApprovals(items, { profile: loadProfileMaybe(), categories: cats })
+    : [];
+
+  // --json: a machine-readable projection of the SAME ordered/grouped list the
+  // text path prints, so the dashboard (AGEN-204) consumes this helper's
+  // ordering/grouping verbatim rather than re-parsing the raw inbox or
+  // re-implementing orderApprovals. Groups preserve first-appearance order of
+  // the ordered list (i.e. category-weight order). Empty queue → valid empty
+  // JSON, never a human sentence.
+  if (asJson) return process.stdout.write(`${serializeGroupedJson(ordered, cats, { all, category: wantCat || null })}\n`);
+
+  if (!ordered.length) {
     if (wantCat) return process.stdout.write(`No ${wantCat.toUpperCase()} items.\n`);
     return process.stdout.write(all ? 'Inbox is empty.\n' : 'No pending items.\n');
   }
 
-  const ordered = orderApprovals(items, { profile: loadProfileMaybe(), categories: cats });
   let current = null;
   for (const it of ordered) {
     if (it.category !== current) {
@@ -638,6 +650,51 @@ function listGrouped() {
     const meta = it.id ? ` {id=${it.id}}` : '';
     process.stdout.write(`${String(it.num).padStart(2)}. [${it.done ? 'x' : ' '}] ${head}${meta}\n`);
   }
+}
+
+// Build the --json payload from an already-ordered item list. Pure projection:
+// no re-ordering, no re-ranking. Each group's per-category metadata comes from
+// the frozen approval-categories.yml table (weight/batchable/decision/sink), so
+// the SUBMIT invariant (batchable:false) travels to the reader as data, not as
+// a second copy of the rule.
+function serializeGroupedJson(ordered, cats, { all, category }) {
+  const groups = [];
+  let current = null;
+  for (const it of ordered) {
+    if (it.category !== current || !groups.length) {
+      current = it.category;
+      const row = cats.get(it.category);
+      groups.push({
+        category: it.category,
+        label: labelForCategory(it.category, cats),
+        weight: row ? row.weight : (it.category === 'general' ? GENERAL_WEIGHT : 0),
+        batchable: row ? row.batchable === true : false,
+        decision: row && row.decision ? String(row.decision) : '',
+        sink: row && row.sink ? String(row.sink) : 'none',
+        items: [],
+      });
+    }
+    const group = groups[groups.length - 1];
+    group.items.push({
+      num: it.num,
+      done: !!it.done,
+      category: it.category,
+      label: group.label,
+      headline: it.headline || it.text || '',
+      id: it.id || null,
+      ref: (it.meta && it.meta.ref && it.meta.ref !== '-') ? it.meta.ref : null,
+      sink: (it.meta && it.meta.sink) ? it.meta.sink : (group.sink || null),
+    });
+  }
+  const pending = ordered.filter((it) => !it.done).length;
+  return JSON.stringify({
+    schema: 'career-ops/approval-queue@1',
+    all: !!all,
+    category: category || null,
+    pending,
+    total: ordered.length,
+    groups,
+  });
 }
 
 function fail(msg) {

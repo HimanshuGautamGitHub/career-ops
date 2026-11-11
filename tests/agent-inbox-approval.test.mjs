@@ -364,3 +364,75 @@ test('orderApprovals: within a tier, higher scorePosting fit sorts first', () =>
   const ordered = orderApprovals(items, { profile, categories });
   assert.equal(ordered[0].headline, 'Acme — Senior ML Engineer', 'the fitter posting leads its tier');
 } );
+
+// ── `list --grouped --json`: the machine projection ────────────────────────
+//
+// This is the exact contract the read-only Go dashboard panel consumes
+// (dashboard/internal/data/approval_queue.go → ParseApprovalQueue). The panel
+// never re-parses the raw inbox and never re-ranks; it renders this projection
+// verbatim. These assertions pin the shape the Go structs unmarshal so the
+// seam can't drift silently: schema tag, group order (category weight), item
+// order within a tier, the SUBMIT batchable:false invariant, and null ref.
+
+test('`list --grouped --json` emits the versioned schema the dashboard consumes', () => {
+  const dir = tmp();
+  try {
+    cli(dir, ['enqueue', '--category', 'targeting', '--ref', 'portals.yml', 'add fintech keywords']);
+    cli(dir, ['enqueue', '--category', 'submit', '--ref', '042', '--sink', 'form-submit', 'Acme — MLE']);
+    cli(dir, ['enqueue', '--category', 'message', '--ref', 'output/cover.md', '--sink', 'email', 'Beta — cover letter']);
+    const r = cli(dir, ['list', '--grouped', '--json']);
+    assert.equal(r.code, 0, r.err);
+
+    const q = JSON.parse(r.out);
+    assert.equal(q.schema, 'career-ops/approval-queue@1', 'schema tag the Go loader keys on');
+    assert.equal(q.pending, 3);
+    assert.equal(q.total, 3);
+
+    // Group order is category weight, projected as data — never re-sorted downstream.
+    assert.deepEqual(q.groups.map((g) => g.category), ['submit', 'message', 'targeting'], r.out);
+
+    // The SUBMIT invariant travels as data: batchable:false on submit, true elsewhere.
+    const submit = q.groups.find((g) => g.category === 'submit');
+    assert.equal(submit.batchable, false, 'SUBMIT must arrive batchable:false');
+    assert.ok(q.groups.filter((g) => g.category !== 'submit').every((g) => g.batchable === true), r.out);
+
+    // Each item carries the fields the panel renders: id, headline, ref.
+    const item = submit.items[0];
+    assert.match(item.id, /^apr_[0-9a-f]{8}$/);
+    assert.equal(item.ref, '042');
+    assert.equal(item.headline, 'Acme — MLE');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('`list --grouped --json` renders a ref-less item as an explicit null', () => {
+  const dir = tmp();
+  try {
+    // borderline items have no artifact — the ref must serialize as null, which
+    // the Go loader unmarshals to the empty string and the panel shows as "—".
+    cli(dir, ['enqueue', '--category', 'borderline', 'Globex — Staff Engineer (fit 3.9/5)']);
+    const r = cli(dir, ['list', '--grouped', '--json']);
+    assert.equal(r.code, 0, r.err);
+    const q = JSON.parse(r.out);
+    const borderline = q.groups.find((g) => g.category === 'borderline');
+    assert.ok(borderline, r.out);
+    assert.strictEqual(borderline.items[0].ref, null, 'a ref-less item serializes ref:null');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('`list --grouped --json` on an empty inbox is a well-formed empty queue', () => {
+  const dir = tmp();
+  try {
+    const r = cli(dir, ['list', '--grouped', '--json']);
+    assert.equal(r.code, 0, r.err);
+    const q = JSON.parse(r.out);
+    assert.equal(q.schema, 'career-ops/approval-queue@1');
+    assert.equal(q.pending, 0);
+    assert.deepEqual(q.groups, [], 'no pending items means no groups, not a crash');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

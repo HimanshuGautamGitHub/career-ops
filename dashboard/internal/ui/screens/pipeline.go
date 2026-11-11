@@ -144,6 +144,11 @@ type PipelineOpenProgressMsg struct{}
 // PipelineOpenStatsMsg is emitted when the stats (dimension breakdown) screen should open.
 type PipelineOpenStatsMsg struct{}
 
+// PipelineOpenAwaitingMsg is emitted when the "Awaiting you" approval-queue
+// screen should open. Read-only: the screen surfaces pending human-in-the-loop
+// decisions; it never resolves or submits one.
+type PipelineOpenAwaitingMsg struct{}
+
 // Mirrors the ids in templates/discard-reasons.yml, in order.
 // tests/discard-reasons-vocabulary.test.mjs fails when the two drift.
 var canonicalDiscardReasons = []string{
@@ -772,6 +777,9 @@ func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 
 	case "S":
 		return m, func() tea.Msg { return PipelineOpenStatsMsg{} }
+
+	case "a":
+		return m, func() tea.Msg { return PipelineOpenAwaitingMsg{} }
 
 	case "r":
 		return m, func() tea.Msg { return PipelineRefreshMsg{} }
@@ -2572,6 +2580,7 @@ func (m PipelineModel) renderHelp() string {
 		piece("v", i18n.Current.HelpView, false),
 		piece("p", i18n.Current.HelpProgress, false),
 		piece("S", i18n.Current.HelpStats, false),
+		piece("a", i18n.Current.HelpAwaiting, false),
 		piece("t", i18n.Current.HelpLanguage, false),
 		piece("m", i18n.Current.HelpManifesto, false),
 		piece("g/G", i18n.Current.HelpTopEnd, false),
@@ -2601,6 +2610,7 @@ func (m PipelineModel) renderKeysHelp(maxLines int) string {
 		{"v", strings.TrimSpace(i18n.Current.HelpView)},
 		{"p", strings.TrimSpace(i18n.Current.HelpProgress)},
 		{"S", strings.TrimSpace(i18n.Current.HelpStats)},
+		{"a", strings.TrimSpace(i18n.Current.HelpAwaiting)},
 		{"t", strings.TrimSpace(i18n.Current.HelpLanguage)},
 		{"m", strings.TrimSpace(i18n.Current.HelpManifesto)},
 		{"g/G", strings.TrimSpace(i18n.Current.HelpTopEnd)},
