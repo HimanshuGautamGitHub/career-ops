@@ -1,0 +1,139 @@
+# Career-Ops — Approval Queue Taxonomy
+# Canonical vocabulary for the human-in-the-loop approval queue.
+# Source of truth for the writer (agent-inbox.mjs / lib/approval-schema.mjs)
+# AND the reader (dashboard / frontend stage), mirroring templates/states.yml.
+#
+# Both systems MUST use these exact ids. A category id that is not in this file
+# is rejected on write and skipped (with a loud warning) on read — the same
+# closed-vocabulary discipline status-log.tsv's `source` column uses.
+#
+# An approval item is a DURABLE, CATEGORIZED STOP: a decision the agent would
+# otherwise make ad-hoc, parked for the user to clear when they have time.
+# Approving one either lets a thing LEAVE THE MACHINE (SUBMIT, MESSAGE) or
+# CHANGES THE USER'S FACTS / TARGETING (PROFILE, TARGETING), or records a
+# go/no-go DECISION (BORDERLINE). RESUME is the artifact-review gate in between.
+#
+# ---- Per-category keys ----
+#   id            machine id (lowercase); the join key written into the inbox line and the ledger
+#   label         UPPERCASE display tag written in the inbox line as [LABEL]
+#   decision      one sentence: what approving this item means
+#   sink          where the approved thing goes — the audit axis "what crosses a boundary"
+#                   (closed set: form-submit | email | linkedin | file | none)
+#   batchable     may a multi-select / "approve selected" operation ever touch this category?
+#                   SUBMIT is false BY CONSTRUCTION — this is the ethical invariant, not a convention.
+#   resolutions   the closed set of terminal dispositions allowed for this category
+#                   (every one of these is actor=user in the ledger — the agent may never write them)
+#   actor_on_approve  who the ledger REQUIRES as actor for an approving resolution — always `user`
+#   weight        static ordering tier (higher = surfaced first). NOT a score. The intra-tier
+#                   order is delegated entirely to lib/inbox-rank.mjs (scorePosting), never recomputed here.
+#   producers     the modes that emit this category (for the backend wiring stage)
+
+categories:
+  - id: submit
+    label: SUBMIT
+    decision: "A complete application is filled and ready; I will submit it myself."
+    sink: form-submit
+    batchable: false          # INVARIANT — never relaxable. See submit_invariant below.
+    resolutions: [self-submitted, rejected, deferred]
+    actor_on_approve: user
+    weight: 100
+    producers: [apply]
+    description: >
+      The only category whose approval corresponds to an irreversible OUTWARD
+      ACTION the user alone performs. The system never submits. There is no
+      "approve -> act" path for SUBMIT by construction: its only approving
+      resolution is `self-submitted` (the user attests they pressed Submit).
+
+  - id: borderline
+    label: BORDERLINE
+    decision: "Pursue this grey-zone posting, or discard it."
+    sink: none
+    batchable: true
+    resolutions: [pursue, discard, deferred]
+    actor_on_approve: user
+    weight: 90
+    producers: [oferta, auto-pipeline, triage]
+    description: >
+      A go/no-go DECISION, not an artifact: fit sits at the apply/don't-apply
+      boundary (~4.0/5, the Ethical-Use threshold) or Block G flags a
+      legitimacy/risk concern. Approving (`pursue`) may spawn RESUME / MESSAGE /
+      SUBMIT items downstream. Carries the score, the reason, and the risk flag.
+
+  - id: message
+    label: MESSAGE
+    decision: "This outbound text is send-ready; I will send it myself."
+    sink: email            # or linkedin — resolved per-item from the producer; see sink_override
+    batchable: true
+    resolutions: [approved, edited, rejected, deferred]
+    actor_on_approve: user
+    weight: 70
+    producers: [cover, email, contacto]
+    description: >
+      Generated prose that will leave the machine addressed to a person: cover
+      letter, application email, or LinkedIn/recruiter outreach. Draft-only —
+      the system never sends. Distinct from SUBMIT: SUBMIT is a form action,
+      MESSAGE is content. One application may carry both.
+
+  - id: resume
+    label: RESUME
+    decision: "This tailored CV/PDF is accurate; I will use it."
+    sink: file
+    batchable: true
+    resolutions: [approved, edited, rejected, deferred]
+    actor_on_approve: user
+    weight: 60
+    producers: [pdf, latex, text]
+    description: >
+      A CV tailored to a specific posting, awaiting a fact-review before it is
+      attached/uploaded. No network egress by itself, but it is the candidate's
+      facts reshaped to a JD and must be confirmed accurate (fact-gate).
+
+  - id: profile
+    label: PROFILE
+    decision: "Write this fact into my source-of-truth files."
+    sink: file
+    batchable: true
+    resolutions: [approved, edited, rejected, deferred]
+    actor_on_approve: user
+    weight: 40
+    producers: [add, intake, expand]
+    description: >
+      A proposed change to the user's FACTS (cv.md, config/profile.yml,
+      article-digest.md, data/career-profile.yml). Gated by the Source-of-Truth
+      Boundary: facts are user-confirmed, never fabricated. Must carry the
+      claim's source provenance (document / conversation / derived-unverified).
+
+  - id: targeting
+    label: TARGETING
+    decision: "Apply this change to what my search targets."
+    sink: file
+    batchable: true
+    resolutions: [approved, edited, rejected, deferred]
+    actor_on_approve: user
+    weight: 30
+    producers: [titles, discover, patterns, retro]
+    description: >
+      A proposed change to WHO/WHAT the search targets: archetypes / North-Star
+      in modes/_profile.md, or search config in portals.yml (keywords,
+      locations, companies, filters). Gated because it silently changes every
+      future score and scan. The user owns targeting.
+
+# ---- Pre-existing lane (NOT one of the six approval categories) ----
+# Legacy agent-inbox items ("evaluate this URL", "draft a follow-up for #7")
+# carry no [LABEL] tag. They parse as this lane so every existing test and the
+# original feature stay intact. GENERAL is a free INTENT for the agent to run,
+# not a human-approval gate, so it has no ledger requirement and no sink.
+general_lane:
+  id: general
+  label: GENERAL
+  weight: 50
+  note: >
+    Untagged legacy items. The approval queue and the original inbox share one
+    file; `list` groups GENERAL separately. Never emitted by the six producers.
+
+# ---- The SUBMIT ethical invariant, stated for the implementer ----
+submit_invariant:
+  - "batchable:false is a property of the SUBMIT CATEGORY, not a per-item flag that could be forgotten."
+  - "No code path may emit a SUBMIT item with batchable true, and no multi-item/batch approve may include a SUBMIT item — the batch operation must refuse loudly (the --expect-guard spirit)."
+  - "SUBMIT has no `approved` resolution and no automated sink action. Its only approving resolution is `self-submitted`, and the ledger REQUIRES actor=user for it."
+  - "A ledger row that records an approving resolution with actor != user is a contract violation the backend test suite must reject."
