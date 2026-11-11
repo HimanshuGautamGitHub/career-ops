@@ -27,6 +27,7 @@ const (
 	viewReport
 	viewProgress
 	viewStats
+	viewAwaiting
 )
 
 type appModel struct {
@@ -34,12 +35,34 @@ type appModel struct {
 	viewer          screens.ViewerModel
 	progress        screens.ProgressModel
 	stats           screens.StatsModel
+	awaiting        screens.AwaitingModel
 	state           viewState
 	careerOpsPath   string
 	theme           theme.Theme
 	progressMetrics model.ProgressMetrics
 	statsMetrics    model.StatsMetrics
 	evaluatedCount  int
+}
+
+// awaitingLoadedMsg carries the result of shelling out to agent-inbox.mjs for
+// the approval queue. The load runs in a tea.Cmd goroutine so the UI stays
+// responsive; Err is set instead of Queue when the child failed.
+type awaitingLoadedMsg struct {
+	Queue data.ApprovalQueue
+	Err   string
+}
+
+// loadAwaitingQueue reads the Stage-2 approval queue off the CLI's own JSON
+// projection. It never re-parses the inbox or re-ranks — it consumes the
+// helper's output verbatim (data.LoadApprovalQueue).
+func loadAwaitingQueue(careerOpsPath string) tea.Cmd {
+	return func() tea.Msg {
+		queue, err := data.LoadApprovalQueue(careerOpsPath)
+		if err != nil {
+			return awaitingLoadedMsg{Err: err.Error()}
+		}
+		return awaitingLoadedMsg{Queue: queue}
+	}
 }
 
 func (m *appModel) reloadPipelineData() {
@@ -126,6 +149,9 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.state == viewStats {
 			m.stats.Resize(msg.Width, msg.Height)
+		}
+		if m.state == viewAwaiting {
+			m.awaiting.Resize(msg.Width, msg.Height)
 		}
 		pm, cmd := m.pipeline.Update(msg)
 		m.pipeline = pm
@@ -253,6 +279,40 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = viewPipeline
 		return m, nil
 
+	case screens.PipelineOpenAwaitingMsg:
+		// Show the panel immediately in a loading-free empty frame, then shell
+		// out for the queue; the loaded/err message swaps in the real content.
+		m.awaiting = screens.NewAwaitingModel(
+			m.theme,
+			data.ApprovalQueue{},
+			m.pipeline.Width(), m.pipeline.Height(),
+		)
+		m.state = viewAwaiting
+		return m, loadAwaitingQueue(m.careerOpsPath)
+
+	case awaitingLoadedMsg:
+		// A stale result can arrive after the user already dismissed the panel;
+		// only apply it while the panel is still the active screen.
+		if m.state != viewAwaiting {
+			return m, nil
+		}
+		if msg.Err != "" {
+			m.awaiting = screens.NewAwaitingErrorModel(
+				m.theme, msg.Err,
+				m.pipeline.Width(), m.pipeline.Height(),
+			)
+		} else {
+			m.awaiting = screens.NewAwaitingModel(
+				m.theme, msg.Queue,
+				m.pipeline.Width(), m.pipeline.Height(),
+			)
+		}
+		return m, nil
+
+	case screens.AwaitingClosedMsg:
+		m.state = viewPipeline
+		return m, nil
+
 	case screens.PipelineOpenURLMsg:
 		return m, openCmd(msg.URL)
 
@@ -286,6 +346,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == viewStats {
 			sm, cmd := m.stats.Update(msg)
 			m.stats = sm
+			return m, cmd
+		}
+		if m.state == viewAwaiting {
+			am, cmd := m.awaiting.Update(msg)
+			m.awaiting = am
 			return m, cmd
 		}
 		pm, cmd := m.pipeline.Update(msg)
@@ -439,6 +504,8 @@ func (m appModel) View() string {
 		return m.progress.View()
 	case viewStats:
 		return m.stats.View()
+	case viewAwaiting:
+		return m.awaiting.View()
 	default:
 		return m.pipeline.View()
 	}

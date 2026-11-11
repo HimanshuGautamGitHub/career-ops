@@ -88,6 +88,19 @@ type Catalog struct {
 	InsightWorkMode        string
 	InsightPayBenchmark    string
 
+	// Awaiting-you panel (read-only view of the approval queue)
+	AwaitingTitle      string
+	AwaitingSummary    string
+	AwaitingEmpty      string
+	AwaitingEmptyHint  string
+	AwaitingReadOnly   string
+	AwaitingActionHint string
+	AwaitingSubmitNote string
+	AwaitingLoadError  string
+	AwaitingNoRef      string
+	AwaitingColWhy     string
+	AwaitingColRef     string
+
 	// Seniority levels
 	SeniorityExecutive      string
 	SeniorityStaffPrincipal string
@@ -137,6 +150,7 @@ type Catalog struct {
 	HelpView       string
 	HelpProgress   string
 	HelpStats      string
+	HelpAwaiting   string
 	HelpQuit       string
 	HelpKeys       string
 	HelpScroll     string
@@ -393,6 +407,19 @@ var En = Catalog{
 	InsightWorkMode:        "Workplace distribution: %.0f%% of roles operate as %s",
 	InsightPayBenchmark:    "Compensation benchmark: Median top pay is $%.0fK (peak $%.0fK) across %d data points",
 
+	// Awaiting-you panel (read-only view of the approval queue)
+	AwaitingTitle:      "AWAITING YOU",
+	AwaitingSummary:    "%d decision(s) parked for you",
+	AwaitingEmpty:      "Nothing awaiting you",
+	AwaitingEmptyHint:  "Approvals the agent parks for you show up here. The queue is clear.",
+	AwaitingReadOnly:   "Read-only view. The dashboard never submits or sends anything.",
+	AwaitingActionHint: "Act from the terminal: agent-inbox approve/edit/reject/snooze <id>",
+	AwaitingSubmitNote: "SUBMIT items are confirmed one at a time — you submit each application yourself.",
+	AwaitingLoadError:  "Could not load the approval queue: %s",
+	AwaitingNoRef:      "—",
+	AwaitingColWhy:     "WHY YOU'RE NEEDED",
+	AwaitingColRef:     "REF",
+
 	// Seniority levels
 	SeniorityExecutive:      "Executive",
 	SeniorityStaffPrincipal: "Staff / Principal",
@@ -442,6 +469,7 @@ var En = Catalog{
 	HelpView:       " view  ",
 	HelpProgress:   " progress  ",
 	HelpStats:      " stats  ",
+	HelpAwaiting:   " awaiting  ",
 	HelpQuit:       " quit",
 	HelpKeys:       " keys  ",
 	HelpScroll:     " scroll  ",
@@ -564,6 +592,19 @@ var Tr = Catalog{
 	InsightWorkMode:        "Çalışma yeri dağılımı: ilanların %%%.0f'i %s olarak çalışıyor",
 	InsightPayBenchmark:    "Ücret karşılaştırması: medyan üst maaş $%.0fK (en yüksek $%.0fK) — %d veri noktası",
 
+	// Awaiting-you panel (read-only view of the approval queue)
+	AwaitingTitle:      "SİZİ BEKLEYENLER",
+	AwaitingSummary:    "Sizin için bekletilen %d karar",
+	AwaitingEmpty:      "Sizi bekleyen bir şey yok",
+	AwaitingEmptyHint:  "Ajanın sizin için beklettiği onaylar burada görünür. Kuyruk temiz.",
+	AwaitingReadOnly:   "Salt okunur görünüm. Panel hiçbir şeyi kendisi göndermez veya iletmez.",
+	AwaitingActionHint: "İşlemi terminalden yapın: agent-inbox approve/edit/reject/snooze <id>",
+	AwaitingSubmitNote: "SUBMIT öğeleri tek tek onaylanır — her başvuruyu kendiniz gönderirsiniz.",
+	AwaitingLoadError:  "Onay kuyruğu yüklenemedi: %s",
+	AwaitingNoRef:      "—",
+	AwaitingColWhy:     "NEDEN GEREKLİSİNİZ",
+	AwaitingColRef:     "REF",
+
 	// Seniority levels
 	SeniorityExecutive:      "Yönetici",
 	SeniorityStaffPrincipal: "Kıdemli Uzman / Lider",
@@ -613,6 +654,7 @@ var Tr = Catalog{
 	HelpView:       " görünüm  ",
 	HelpProgress:   " ilerleme  ",
 	HelpStats:      " istatistik  ",
+	HelpAwaiting:   " bekleyenler  ",
 	HelpQuit:       " çıkış",
 	HelpKeys:       " tuşlar  ",
 	HelpScroll:     " kaydır  ",
@@ -735,6 +777,19 @@ var Es = Catalog{
 	InsightWorkMode:        "Distribución laboral: el %.0f%% de los puestos opera como %s",
 	InsightPayBenchmark:    "Referencia salarial: La mediana de salario máximo es $%.0fK (pico $%.0fK) en %d puntos de datos",
 
+	// Awaiting-you panel (read-only view of the approval queue)
+	AwaitingTitle:      "ESPERANDO POR TI",
+	AwaitingSummary:    "%d decisión(es) en espera de tu revisión",
+	AwaitingEmpty:      "Nada esperando por ti",
+	AwaitingEmptyHint:  "Las aprobaciones que el agente deja para ti aparecen aquí. La cola está vacía.",
+	AwaitingReadOnly:   "Vista de solo lectura. El panel nunca envía ni manda nada por sí mismo.",
+	AwaitingActionHint: "Actúa desde la terminal: agent-inbox approve/edit/reject/snooze <id>",
+	AwaitingSubmitNote: "Los elementos SUBMIT se confirman de uno en uno: tú envías cada solicitud.",
+	AwaitingLoadError:  "No se pudo cargar la cola de aprobaciones: %s",
+	AwaitingNoRef:      "—",
+	AwaitingColWhy:     "POR QUÉ TE NECESITA",
+	AwaitingColRef:     "REF",
+
 	// Seniority levels
 	SeniorityExecutive:      "Ejecutivo",
 	SeniorityStaffPrincipal: "Staff / Principal",
@@ -784,6 +839,7 @@ var Es = Catalog{
 	HelpView:       " vista  ",
 	HelpProgress:   " progreso  ",
 	HelpStats:      " estadísticas  ",
+	HelpAwaiting:   " espera  ",
 	HelpQuit:       " salir",
 	HelpKeys:       " teclas  ",
 	HelpScroll:     " desplazar  ",
