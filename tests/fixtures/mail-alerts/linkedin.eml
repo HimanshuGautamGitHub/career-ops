@@ -1,0 +1,29 @@
+From: LinkedIn Job Alerts <jobs-noreply@linkedin.com>
+Subject: "Senior Backend Engineer": Acme Corp is hiring
+To: candidate@example.com
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="b1_linkedin_alert"
+
+--b1_linkedin_alert
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+Your job alert for backend engineer
+
+Senior Backend Engineer
+Acme Corp
+San Francisco, CA (Remote)
+View job: https://www.linkedin.com/comm/jobs/view/3812345678/?trk=3Deml-=
+jobs_alert_digest&midToken=3Dabc
+
+--b1_linkedin_alert
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<html><body>
+<p>Your job alert for backend engineer</p>
+<a href=3D"https://www.linkedin.com/comm/jobs/view/3812345678/?trk=3Deml">=
+Senior Backend Engineer</a>
+</body></html>
+
+--b1_linkedin_alert--

@@ -1,0 +1,14 @@
+{
+  "id": "mail-alerts",
+  "name": "Job-alert email import",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": "Turn saved LinkedIn/Indeed/Naukri/ZipRecruiter job-alert emails into pipeline candidates (offline, read-only, no scraping).",
+  "hooks": ["ingest"],
+  "jobPostings": true,
+  "requiredEnv": [],
+  "allowedHosts": [],
+  "skill": "skill.md",
+  "humanInTheLoop": true,
+  "homepage": "https://github.com/santifer/career-ops"
+}

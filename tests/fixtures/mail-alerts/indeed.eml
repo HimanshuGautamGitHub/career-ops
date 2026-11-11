@@ -1,0 +1,13 @@
+From: Indeed <alert@indeed.com>
+Subject: Data Engineer - new jobs for your search
+To: candidate@example.com
+MIME-Version: 1.0
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: 7bit
+
+<html><body>
+<h2>New jobs for "data engineer"</h2>
+<a href="https://www.indeed.com/rc/clk?jk=abc123def456&fccid=xyz&vjs=3">Data Engineer - Globex</a>
+<span class="location">Austin, TX</span>
+<a href="https://www.indeed.com/pagead/clk?mo=r&jk=abc123def456&utm_source=alert">Apply now</a>
+</body></html>
