@@ -458,3 +458,12 @@ Do not auto-generate the cover letter PDF without going through the interactive 
 ## Post-generation
 
 If the job is already in the tracker, flip its PDF cell from ❌ to ✅ with `node mark-pdf-ready.mjs {report number}` (the same report number passed to `--report` above). Do not edit `data/applications.md` by hand.
+
+**Enqueue the RESUME-review decision (approval queue).** A tailored CV is a stop the agent would otherwise make ad-hoc — the candidate should eyeball the generated PDF before it goes into an application. Record it as a durable approval item so the review survives the turn:
+
+```bash
+node agent-inbox.mjs enqueue --category resume --ref <pdf-path> --sink file --producer pdf \
+  --note "what was tailored, in one line" "{Company} — {Role}: tailored CV ready to review"
+```
+
+`<pdf-path>` is the `{pdf-path}` from Step 21 (the bundle `cv/tailored/vNNN/cv.pdf` or the one-off `output/cv-…pdf`). This is additive and does not gate generation — the PDF is already written. Approving the item is the candidate confirming the CV is good to use (ledger event `approved`); it never sends or submits anything. In an unattended run this parks the review durably instead of relying on the candidate to re-open the file from memory.

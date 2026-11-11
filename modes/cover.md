@@ -370,6 +370,15 @@ After the PDF is confirmed, add a brief note:
 - Which gap acknowledgments were included and which were omitted, and why
 - Whether the word count hit the 350-420 target (if short or long, note it)
 
+**Enqueue the MESSAGE decision (approval queue).** A cover letter leaves the machine when the candidate sends it — a stop the agent would otherwise make ad-hoc. Record it as a durable approval item so the send decision survives the turn:
+
+```bash
+node agent-inbox.mjs enqueue --category message --ref <cover-pdf-path> --sink email --producer cover \
+  --note "the angle, in one line" "{Company} — {Role}: cover letter ready to send"
+```
+
+`<cover-pdf-path>` is the `output/{company-slug}-{role-slug}-cover.pdf` from Step 9. This is additive and never sends: the agent drafts and generates, the candidate sends. Approving the item records the candidate's go-ahead (ledger event `approved`) — it does not email, submit, or transmit anything. In an unattended run this replaces the ephemeral `needs_confirmation:` end-state with a queue item that persists.
+
 ---
 
 ## Slug mode specifics
