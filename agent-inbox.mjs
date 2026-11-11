@@ -468,13 +468,25 @@ async function disposition(action) {
   const logPath = resolveApprovalLogPath(PATH);
   const cats = loadCats();
 
+  // Same loud-failure "right command, wrong target" guard `resolve` honors: every
+  // --expect given must carry a value and must hold against every picked item, or
+  // the whole disposition aborts with nothing written. Silently swallowing it (it
+  // is a VALUE_FLAG, so collectNums() already skips its value) would turn an
+  // explicit safety confirmation into a no-op.
+  const expects = optAll('expect');
+
   const outcome = await withPipelineLock(PATH, () => {
+    if (expects.includes('')) return { error: '--expect needs a substring, e.g. --expect "Dana-Farber"' };
     const items = parseItems();
     const picked = [];
     for (const n of nums) {
       const target = items[n - 1];
       if (!target) return { error: `no item #${n} — inbox has ${items.length} item(s). Run \`list --all\`.` };
       if (target.done) return { error: `item #${n} is already resolved — refusing to overwrite it:\n  #${n}: ${target.text}` };
+      const missing = expects.find((expect) => !target.text.toLowerCase().includes(expect.toLowerCase()));
+      if (missing !== undefined) {
+        return { error: `item #${n} does not contain --expect ${JSON.stringify(missing)} — refusing to ${action}:\n  #${n}: ${target.text}` };
+      }
       picked.push({ n, target, parsed: parseItemText(target.text) });
     }
 
@@ -644,11 +656,11 @@ const USAGE =
   '        [--ref <report#|path>] [--sink <form-submit|email|linkedin|file|none>] [--producer <mode>] "<headline>"\n' +
   '        (or `add --category ...` — same thing)\n' +
   '  node agent-inbox.mjs list [--grouped | --category <cat>] [--all]\n' +
-  '  node agent-inbox.mjs approve <n...> [--note "..."]\n' +
-  '  node agent-inbox.mjs edit <n...>    [--note "..."]\n' +
-  '  node agent-inbox.mjs reject <n...>  [--note "..."]\n' +
-  '  node agent-inbox.mjs snooze <n...>  [--note "..."]   (stays pending, records deferred)\n' +
-  '  node agent-inbox.mjs batch-approve <n...>            (refuses if any item is SUBMIT)\n' +
+  '  node agent-inbox.mjs approve <n...> [--expect "substring"] [--note "..."]\n' +
+  '  node agent-inbox.mjs edit <n...>    [--expect "substring"] [--note "..."]\n' +
+  '  node agent-inbox.mjs reject <n...>  [--expect "substring"] [--note "..."]\n' +
+  '  node agent-inbox.mjs snooze <n...>  [--expect "substring"] [--note "..."]   (stays pending, records deferred)\n' +
+  '  node agent-inbox.mjs batch-approve <n...> [--expect "substring"]            (refuses if any item is SUBMIT)\n' +
   '\n' +
   'Numbers are stable file positions: `list` shows gaps once items are\n' +
   'resolved, and a batch of resolves read off one `list` stays correct.\n' +

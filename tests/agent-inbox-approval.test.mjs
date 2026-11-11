@@ -245,6 +245,70 @@ test('snooze leaves the item pending and records event=deferred', () => {
   }
 });
 
+// --expect is the same loud-failure "right command, wrong target" guard `resolve`
+// honors. A disposition (approve/edit/reject/snooze/batch-approve) that silently
+// swallows it is a safety regression: the caller asked to confirm the target and
+// the queue skipped the check. These lock it in for the disposition verbs.
+test('disposition --expect: a mismatched substring aborts loudly, writing no tick and no ledger row', () => {
+  const dir = tmp();
+  try {
+    cli(dir, ['enqueue', '--category', 'resume', '--ref', 'output/cv.pdf', 'Globex — Staff MLE']);
+    const before = ledgerRows(dir).length;
+    const r = cli(dir, ['approve', '1', '--expect', 'Acme']);
+    assert.notEqual(r.code, 0, 'approve with a mismatched --expect must fail');
+    assert.ok(/expect/i.test(r.err), r.err);
+    // Nothing written: item still pending, no new ledger row.
+    assert.ok(inboxLines(dir)[0].includes('[ ]'), inboxLines(dir)[0]);
+    assert.ok(!/→ result:/.test(inboxLines(dir)[0]), inboxLines(dir)[0]);
+    assert.equal(ledgerRows(dir).length, before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('disposition --expect: a matching substring proceeds and records the event', () => {
+  const dir = tmp();
+  try {
+    cli(dir, ['enqueue', '--category', 'resume', '--ref', 'output/cv.pdf', 'Globex — Staff MLE']);
+    const r = cli(dir, ['approve', '1', '--expect', 'Globex']);
+    assert.equal(r.code, 0, r.err);
+    assert.ok(inboxLines(dir)[0].includes('[x]'), inboxLines(dir)[0]);
+    assert.equal(ledgerRows(dir).at(-1).event, 'approved');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('disposition --expect: a bare --expect (no value) is a usage error, never a skipped guard', () => {
+  const dir = tmp();
+  try {
+    cli(dir, ['enqueue', '--category', 'resume', '--ref', 'output/cv.pdf', 'Globex — CV']);
+    const r = cli(dir, ['approve', '1', '--expect']);
+    assert.notEqual(r.code, 0, 'a bare --expect must fail, not silently pass');
+    assert.ok(inboxLines(dir)[0].includes('[ ]'), inboxLines(dir)[0]);
+    assert.equal(ledgerRows(dir).length, 1); // only the queued row
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('batch-approve honors --expect against every picked item', () => {
+  const dir = tmp();
+  try {
+    cli(dir, ['enqueue', '--category', 'resume', '--ref', 'output/a.pdf', 'Acme — CV']);
+    cli(dir, ['enqueue', '--category', 'resume', '--ref', 'output/b.pdf', 'Beta — CV']);
+    const before = ledgerRows(dir).length;
+    // 'Acme' is in item 1 but not item 2 — the batch must abort whole.
+    const r = cli(dir, ['batch-approve', '1', '2', '--expect', 'Acme']);
+    assert.notEqual(r.code, 0, 'batch-approve with an --expect that misses one item must fail');
+    assert.ok(inboxLines(dir)[0].includes('[ ]'), inboxLines(dir)[0]);
+    assert.ok(inboxLines(dir)[1].includes('[ ]'), inboxLines(dir)[1]);
+    assert.equal(ledgerRows(dir).length, before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('batch-approve refuses when a SUBMIT item is present and writes nothing', () => {
   const dir = tmp();
   try {
