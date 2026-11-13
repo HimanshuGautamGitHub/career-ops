@@ -15,7 +15,11 @@ type Form = {
   name: string;
   email: string;
   location: string;
+  city: string;
+  country: string;
   roles: string[];
+  seniority: string;
+  workSetup: string;
   compMin: number | null;
   compMax: number | null;
   compRange: string;
@@ -27,7 +31,11 @@ const EMPTY: Form = {
   name: "",
   email: "",
   location: "",
+  city: "",
+  country: "",
   roles: [],
+  seniority: "",
+  workSetup: "",
   compMin: null,
   compMax: null,
   compRange: "",
@@ -36,6 +44,14 @@ const EMPTY: Form = {
 };
 
 const MAX_ROLES = 6;
+
+// AGEN-249 work-setup enum. "" is the unset option (no preference saved).
+const WORK_SETUP_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "No preference" },
+  { value: "remote", label: "Remote" },
+  { value: "hybrid", label: "Hybrid" },
+  { value: "onsite", label: "On-site" },
+];
 
 const LABEL = "mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-muted";
 const INPUT =
@@ -120,6 +136,11 @@ export function PreferencesSection() {
     if (form.roles.length) patch.roles = form.roles;
     if (form.currency.trim()) patch.currency = form.currency.trim();
     if (form.remote.trim()) patch.remote = form.remote.trim();
+    if (form.city.trim()) patch.city = form.city.trim();
+    if (form.country.trim()) patch.country = form.country.trim();
+    // Empty work-setup = "No preference"; omit it so a blank never clears a saved value.
+    if (form.workSetup.trim()) patch.workSetup = form.workSetup.trim();
+    if (form.seniority.trim()) patch.seniority = form.seniority.trim();
 
     // Comp bounds travel as a pair only. The POST writer needs both to form
     // "<min>-<max>"; sending one alone would be dropped, so validate together.
@@ -230,6 +251,35 @@ export function PreferencesSection() {
             />
           </div>
 
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="pref-city" className={LABEL}>
+                City
+              </label>
+              <input
+                id="pref-city"
+                type="text"
+                value={form.city}
+                onChange={(e) => set("city", e.target.value)}
+                placeholder="Berlin"
+                className={INPUT}
+              />
+            </div>
+            <div>
+              <label htmlFor="pref-country" className={LABEL}>
+                Country
+              </label>
+              <input
+                id="pref-country"
+                type="text"
+                value={form.country}
+                onChange={(e) => set("country", e.target.value)}
+                placeholder="Germany"
+                className={INPUT}
+              />
+            </div>
+          </div>
+
           <div>
             <label htmlFor="pref-roles" className={LABEL}>
               Target roles
@@ -327,6 +377,43 @@ export function PreferencesSection() {
               replace it.
             </p>
           )}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="pref-seniority" className={LABEL}>
+                Seniority
+              </label>
+              <input
+                id="pref-seniority"
+                type="text"
+                value={form.seniority}
+                onChange={(e) => set("seniority", e.target.value)}
+                placeholder="Senior, Staff, Lead…"
+                aria-describedby="pref-seniority-hint"
+                className={INPUT}
+              />
+              <p id="pref-seniority-hint" className="mt-1 text-xs text-faint">
+                Updates your primary archetype only — your other targeting is untouched.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="pref-work-setup" className={LABEL}>
+                Work setup
+              </label>
+              <select
+                id="pref-work-setup"
+                value={form.workSetup}
+                onChange={(e) => set("workSetup", e.target.value)}
+                className={INPUT}
+              >
+                {WORK_SETUP_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
           <div>
             <label htmlFor="pref-remote" className={LABEL}>
