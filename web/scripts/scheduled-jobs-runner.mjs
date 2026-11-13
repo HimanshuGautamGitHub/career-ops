@@ -18,6 +18,7 @@ import { getCareerOpsRoot } from "../../path-resolver.mjs";
 import { pollLinkedInInbox } from "../../lib/linkedin-auto.mjs";
 import { getProfilePath } from "../src/lib/core/profile-path.mjs";
 import { scanFailureMessage } from "../src/lib/scheduled-scan-error.mjs";
+import { expandFiltersForScan } from "../src/lib/explore-expand.mjs";
 
 const CODE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const MAX_RUNS = 100;
@@ -149,7 +150,10 @@ function writeJobPortals(root, job) {
   const base = yaml.load(fs.readFileSync(portalsPath, "utf8"));
   if (!base || typeof base !== "object") throw new Error("portals.yml must contain a mapping");
 
-  const filters = job.filters || {};
+  // Fold the coarse roleType/workSetup axes into positive/allow before reading
+  // them — the Explorer ad-hoc path does this in writeTempPortals, so the
+  // scheduled path must too or those axes are silently dropped (AGEN-254).
+  const filters = expandFiltersForScan(job.filters || {});
   const positive = Array.isArray(filters.positive)
     ? filters.positive.filter((value) => typeof value === "string" && value.trim())
     : [];

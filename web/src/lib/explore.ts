@@ -16,9 +16,69 @@ export const ATS_LABEL: Record<AtsSource, string> = {
   workday: "Workday",
 };
 
+/** Role-type / seniority family (AGEN-254). Coarse on purpose: the scanner
+ *  matches substrings, so "intern" catches "internship", "senior" catches
+ *  "senior staff". Maps onto title_filter.positive keyword injection. */
+export type RoleType =
+  | "intern"
+  | "junior"
+  | "mid"
+  | "senior"
+  | "staff"
+  | "principal"
+  | "lead"
+  | "manager"
+  | "director"
+  | "vp"
+  | "c-level";
+
+export const ROLE_TYPES: RoleType[] = [
+  "intern", "junior", "mid", "senior", "staff",
+  "principal", "lead", "manager", "director", "vp", "c-level",
+];
+
+export const ROLE_TYPE_LABEL: Record<RoleType, string> = {
+  intern: "Intern",
+  junior: "Junior",
+  mid: "Mid-level",
+  senior: "Senior",
+  staff: "Staff",
+  principal: "Principal",
+  lead: "Lead",
+  manager: "Manager",
+  director: "Director",
+  vp: "VP",
+  "c-level": "C-level",
+};
+
+/** Keywords a RoleType injects into title_filter.positive — the single source
+ *  of truth is explore-expand.mjs (shared with the scheduled runner). */
+export const ROLE_TYPE_KEYWORDS: Record<RoleType, string[]> = ROLE_TYPE_KEYWORDS_JS;
+
+/** Work-setup preference (AGEN-254). Multi-select: both remote and hybrid is
+ *  ["remote", "hybrid"]. Maps onto the location allow list only — the
+ *  full-fidelity workplace_policy object stays under the user's control in
+ *  portals.yml (see AGEN-249 shared-contracts doc). */
+export type WorkSetup = "remote" | "hybrid" | "onsite";
+
+export const WORK_SETUPS: WorkSetup[] = ["remote", "hybrid", "onsite"];
+
+export const WORK_SETUP_LABEL: Record<WorkSetup, string> = {
+  remote: "Remote",
+  hybrid: "Hybrid",
+  onsite: "In-office",
+};
+
+/** Location allow-list entries a WorkSetup adds — the single source of truth is
+ *  explore-expand.mjs (shared with the scheduled runner). "onsite" adds nothing;
+ *  the location allow/block already governs it. */
+export const WORK_SETUP_ALLOW: Record<WorkSetup, string[]> = WORK_SETUP_ALLOW_JS;
+
 /** The full UI filter state. The keyword/location lists mirror scan.mjs's
  *  buildTitleFilter / buildLocationFilter semantics; sinceDays/ats/limitPerAts map
- *  to scan-ats-full.mjs's --since / --ats / --limit. */
+ *  to scan-ats-full.mjs's --since / --ats / --limit. roleType/workSetup are
+ *  optional — undefined (or an empty array) means "don't filter on this axis",
+ *  which is also what pre-AGEN-254 scheduled-job records decode to. */
 export type ExploreFilters = {
   preset?: "china-employers";
   employers?: EmployerSource[];
@@ -31,6 +91,8 @@ export type ExploreFilters = {
   sinceDays: number;
   ats: AtsSource[];
   limitPerAts: number;
+  roleType?: RoleType[];
+  workSetup?: WorkSetup[];
 };
 
 export const DEFAULT_FILTERS: ExploreFilters = {
@@ -121,6 +183,16 @@ export type ScanEvent =
 import { cleanChips } from "./clean-chips.mjs";
 export { cleanChips };
 
+// The roleType/workSetup keyword maps and the fold live in explore-expand.mjs
+// (plain JS) so the scheduled-jobs runner — which runs as plain `node` with no
+// bundler and cannot import this .ts — shares one source of truth with the
+// Explorer path. Re-exported here with their TS types for existing consumers.
+import {
+  ROLE_TYPE_KEYWORDS as ROLE_TYPE_KEYWORDS_JS,
+  WORK_SETUP_ALLOW as WORK_SETUP_ALLOW_JS,
+  expandFiltersForScan as expandFiltersForScanJs,
+} from "./explore-expand.mjs";
+
 function clampNum(v: unknown, lo: number, hi: number, fallback: number): number {
   const n = Number(v);
   if (!Number.isFinite(n)) return fallback;
@@ -168,8 +240,25 @@ export function parseExplorePatch(
   if (raw.limit !== undefined) next.limitPerAts = clampNum(raw.limit, 50, 500, base.limitPerAts);
   if (raw.limitPerAts !== undefined) next.limitPerAts = clampNum(raw.limitPerAts, 50, 500, base.limitPerAts);
   if (raw.ats !== undefined) next.ats = cleanAts(raw.ats);
+  if (raw.roleType !== undefined) next.roleType = cleanEnumList(raw.roleType, ROLE_TYPES);
+  if (raw.workSetup !== undefined) next.workSetup = cleanEnumList(raw.workSetup, WORK_SETUPS);
   return next;
 }
+
+/** Keep only known enum values from an array, de-duped; anything else (a
+ *  non-array, an empty result) becomes undefined so it reads as "no filter". */
+function cleanEnumList<T extends string>(v: unknown, allowed: readonly T[]): T[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = [...new Set(v.filter((x): x is T => allowed.includes(x as T)))];
+  return out.length ? out : undefined;
+}
+
+/** Fold the coarse roleType/workSetup axes into the scanner's keyword/location
+ *  lists (AGEN-249 contract). roleType APPENDS seniority keywords to positive;
+ *  workSetup APPENDS allow-list entries. Both are additive — the user's explicit
+ *  chips always survive — idempotent, and case-insensitively de-duped via
+ *  cleanChips. Returns a new object; the input is never mutated. */
+export const expandFiltersForScan: (f: ExploreFilters) => ExploreFilters = expandFiltersForScanJs;
 
 /** URL <-> filters codec (so a search is shareable/restorable). */
 export function filtersToParams(f: ExploreFilters): string {
@@ -187,6 +276,8 @@ export function filtersToParams(f: ExploreFilters): string {
   if (f.sinceDays !== DEFAULT_FILTERS.sinceDays) sp.set("since", String(f.sinceDays));
   if (f.ats.length !== ATS_SOURCES.length) sp.set("ats", f.ats.join(","));
   if (f.limitPerAts !== DEFAULT_FILTERS.limitPerAts) sp.set("limit", String(f.limitPerAts));
+  if (f.roleType?.length) sp.set("role", f.roleType.join(","));
+  if (f.workSetup?.length) sp.set("setup", f.workSetup.join(","));
   return sp.toString();
 }
 
@@ -204,6 +295,8 @@ export function paramsToFilters(sp: URLSearchParams, base: ExploreFilters = DEFA
       alwaysAllow: split(sp.get("home")),
       since: sp.get("since") ?? undefined,
       ats: split(sp.get("ats")),
+      roleType: split(sp.get("role")),
+      workSetup: split(sp.get("setup")),
       limit: sp.get("limit") ?? undefined,
     },
     base,
