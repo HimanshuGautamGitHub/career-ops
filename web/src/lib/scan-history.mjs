@@ -26,48 +26,65 @@ import { scheduledStorePath } from "@/lib/scheduled-runner-path.mjs";
 /**
  * Parse data/scan-runs.tsv into the last run + a total count.
  *
- * Header-name parsing, NEVER positional (mirrors stats.mjs computeRunStats):
- * scan.mjs may append columns in later versions, so a positional slice would
- * silently miscount once the schema grows. Torn rows (crash mid-append),
- * rows wider than the header (schema drift), and rows with a bad timestamp are
- * skipped.
+ * Header-name parsing, NEVER positional: scan.mjs may append columns in later
+ * versions, so a positional slice would silently miscount once the schema grows.
+ * Torn rows (crash mid-append) and rows with a bad timestamp are skipped. Rows
+ * WIDER than the header are kept, unlike stats.mjs computeRunStats: the fields
+ * this feature reads all precede any appended column, and those wider rows are
+ * the newest scans — discarding them is exactly the "last-scan date not
+ * retained" bug this exists to fix.
  *
  * @param {string|null|undefined} content Raw scan-runs.tsv text.
- * @returns {{ lastRun: ScanRunRecord|null, totalRuns: number }}
+ * @returns {{ lastRun: ScanRunRecord|null, totalRuns: number, driftedRows: number }}
+ *   driftedRows counts rows wider than the stored header (appended columns) —
+ *   still valid runs, but a signal the on-disk header predates scan.mjs's schema.
  */
 export function parseScanRunHistory(content) {
   const lines = String(content ?? "")
     .replace(/\r/g, "")
     .split("\n")
     .filter((l) => l.trim());
-  if (lines.length < 2) return { lastRun: null, totalRuns: 0 };
+  if (lines.length < 2) return { lastRun: null, totalRuns: 0, driftedRows: 0 };
 
   const header = lines[0].split("\t");
   const idx = Object.fromEntries(header.map((h, i) => [h, i]));
-  if (idx.timestamp == null || idx.found == null) return { lastRun: null, totalRuns: 0 };
+  if (idx.timestamp == null || idx.found == null) return { lastRun: null, totalRuns: 0, driftedRows: 0 };
 
   let lastRun = null;
   let totalRuns = 0;
+  let driftedRows = 0;
   for (const line of lines.slice(1)) {
     const cols = line.split("\t");
-    if (cols.length > header.length) continue; // schema drift — header no longer describes this row
-    if (cols.length < header.length) continue; // torn row
+    // scan.mjs (appendScanRunSummary) writes SCAN_RUNS_HEADER only at file
+    // creation and appends new counters at the END, so after an upgrade the
+    // NEWEST rows are WIDER than a pre-upgrade stored header. The fields we read
+    // (timestamp, status, found, new_added) all precede any appended column, so
+    // a wider row is valid data — NOT drift to discard. Dropping it was the
+    // AGEN-251 "Never scanned / stale date" defect. We still count it as drift
+    // (the on-disk header is older than the data) so callers can flag staleness.
+    if (cols.length < header.length) continue; // torn row (crash mid-append)
     const timestamp = cols[idx.timestamp] || "";
     if (!/^\d{4}-\d{2}-\d{2}/.test(timestamp)) continue; // bad timestamp
+    if (cols.length > header.length) driftedRows += 1;
     const num = (name) => {
       const v = Number(cols[idx[name]]);
       return Number.isNaN(v) ? 0 : v;
     };
     totalRuns += 1;
-    lastRun = {
+    const record = {
       timestamp,
       status: idx.status != null ? cols[idx.status] || "completed" : "completed",
       found: num("found"),
       newAdded: idx.new_added != null ? num("new_added") : 0,
       source: "cli",
     };
+    // Newest-by-timestamp, not last-in-file, so an out-of-order ledger still
+    // surfaces the true most-recent scan.
+    if (!lastRun || Date.parse(record.timestamp) >= Date.parse(lastRun.timestamp)) {
+      lastRun = record;
+    }
   }
-  return { lastRun, totalRuns };
+  return { lastRun, totalRuns, driftedRows };
 }
 
 /**
@@ -116,7 +133,7 @@ export function mostRecent(a, b) {
  * that dependency and is unit-testable over a temp directory.
  *
  * @param {string} root Resolved data root.
- * @returns {{ lastRun: ScanRunRecord|null, totalRuns: number }}
+ * @returns {{ lastRun: ScanRunRecord|null, totalRuns: number, driftedRows: number }}
  */
 export function readScanHistory(root) {
   const tsvPath = path.join(root, "data", "scan-runs.tsv");
@@ -132,5 +149,9 @@ export function readScanHistory(root) {
     scheduled = null;
   }
 
-  return { lastRun: mostRecent(cli.lastRun, scheduled), totalRuns: cli.totalRuns };
+  return {
+    lastRun: mostRecent(cli.lastRun, scheduled),
+    totalRuns: cli.totalRuns,
+    driftedRows: cli.driftedRows,
+  };
 }

@@ -31,9 +31,13 @@ function row({ timestamp, status = "completed", found = 0, newAdded = 0 }) {
 }
 
 test("parseScanRunHistory: empty / header-only / missing content → no runs", () => {
-  assert.deepEqual(parseScanRunHistory(""), { lastRun: null, totalRuns: 0 });
-  assert.deepEqual(parseScanRunHistory(null), { lastRun: null, totalRuns: 0 });
-  assert.deepEqual(parseScanRunHistory(HEADER + "\n"), { lastRun: null, totalRuns: 0 });
+  assert.deepEqual(parseScanRunHistory(""), { lastRun: null, totalRuns: 0, driftedRows: 0 });
+  assert.deepEqual(parseScanRunHistory(null), { lastRun: null, totalRuns: 0, driftedRows: 0 });
+  assert.deepEqual(parseScanRunHistory(HEADER + "\n"), {
+    lastRun: null,
+    totalRuns: 0,
+    driftedRows: 0,
+  });
 });
 
 test("parseScanRunHistory: returns the LAST valid row and counts all valid rows", () => {
@@ -75,20 +79,40 @@ test("parseScanRunHistory: skips torn rows and rows with a bad timestamp", () =>
   assert.equal(out.lastRun.timestamp, "2026-11-10T09:00:00Z");
 });
 
-test("parseScanRunHistory: skips drifted rows wider than the header", () => {
+test("parseScanRunHistory: reads rows wider than the header (appended columns) and the newest wins", () => {
+  // scan.mjs writes SCAN_RUNS_HEADER only at file creation and appends new
+  // counters at the END (appendScanRunSummary), so after an upgrade the NEWEST
+  // rows are wider than a pre-upgrade stored header. The fields we read
+  // (timestamp 0, status 1, found 4, new_added 13) all sit before any
+  // appended column, so a wider row is valid data — not drift to discard.
+  // Dropping it was the AGEN-251 "Never scanned / stale date" defect.
   const content = [
     HEADER,
     row({ timestamp: "2026-11-10T09:00:00Z", found: 12, newAdded: 3 }),
-    row({ timestamp: "2026-11-12T14:30:00Z", found: 42, newAdded: 7 }) + "\textra\tcols",
+    row({ timestamp: "2026-11-12T14:30:00Z", found: 42, newAdded: 7 }) + "\t99\t100",
   ].join("\n");
   const out = parseScanRunHistory(content);
-  assert.equal(out.totalRuns, 1);
-  assert.equal(out.lastRun.timestamp, "2026-11-10T09:00:00Z");
+  assert.equal(out.totalRuns, 2);
+  assert.equal(out.driftedRows, 1); // surfaced so the UI can flag a stale on-disk header
+  assert.equal(out.lastRun.timestamp, "2026-11-12T14:30:00Z");
+  assert.equal(out.lastRun.found, 42);
+  assert.equal(out.lastRun.newAdded, 7);
+});
+
+test("parseScanRunHistory: picks the newest by timestamp even when rows are out of order", () => {
+  const content = [
+    HEADER,
+    row({ timestamp: "2026-11-12T14:30:00Z", found: 42, newAdded: 7 }),
+    row({ timestamp: "2026-11-10T09:00:00Z", found: 12, newAdded: 3 }), // older, written last
+  ].join("\n");
+  const out = parseScanRunHistory(content);
+  assert.equal(out.lastRun.timestamp, "2026-11-12T14:30:00Z");
+  assert.equal(out.lastRun.found, 42);
 });
 
 test("parseScanRunHistory: unknown schema (no timestamp/found column) → no runs", () => {
   const out = parseScanRunHistory("foo\tbar\n1\t2");
-  assert.deepEqual(out, { lastRun: null, totalRuns: 0 });
+  assert.deepEqual(out, { lastRun: null, totalRuns: 0, driftedRows: 0 });
 });
 
 test("scheduledLastRun: picks the job with the newest lastRunAt", () => {
@@ -167,7 +191,7 @@ function scheduledStore(job) {
 
 test("readScanHistory: neither source present → no runs", () => {
   withRoot((root) => {
-    assert.deepEqual(readScanHistory(root), { lastRun: null, totalRuns: 0 });
+    assert.deepEqual(readScanHistory(root), { lastRun: null, totalRuns: 0, driftedRows: 0 });
   });
 });
 
