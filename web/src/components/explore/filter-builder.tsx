@@ -56,8 +56,9 @@ function KeywordField({
   onChange: (v: string[]) => void;
   /** Optional native-datalist typeahead. Used by the location field to offer
    *  disambiguated "City, Country" options (AGEN-254) while staying free-text —
-   *  a value absent from the list is still typeable. */
-  suggestions?: string[];
+   *  a value absent from the list is still typeable. Read-only: the curated
+   *  CITY_SUGGESTIONS list is a frozen `readonly string[]`. */
+  suggestions?: readonly string[];
 }) {
   const listId = useId();
   const [draft, setDraft] = useState("");
