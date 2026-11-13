@@ -22,6 +22,9 @@ import { isSearchOnlyWrite, queryWithLiveSearch } from "@/lib/list-search-sync.m
 import { useListSearch } from "@/lib/use-list-search";
 import { COMPARE_MAX } from "@/lib/pipeline-compare.mjs";
 import { postingHref, postingLabel } from "@/lib/posting-url.mjs";
+import { evaluationRecency } from "@/lib/evaluation-recency.mjs";
+import { livenessRowStatus } from "@/lib/liveness-row-status.mjs";
+import { useLivenessProbe, type LivenessProbe } from "@/lib/use-liveness-probe";
 import { trackerCsv, trackerCsvFilename } from "@/lib/tracker-csv.mjs";
 import { clampTrackerWindow, initialTrackerWindow, TRACKER_OVERSCAN, TRACKER_ROW_PX, trackerWindow } from "@/lib/tracker-window.mjs";
 import { clearHeldSaves, excludeInFlightStatusRows, offscreenStatusFailures, reduceHeldSave } from "@/lib/status-save-hold.mjs";
@@ -59,6 +62,15 @@ export function PipelineView({
   cvRows?: string[];
 }) {
   const hasCv = useMemo(() => new Set(cvRows), [cvRows]);
+  // AGEN-252: each row shows when it was last evaluated and a liveness badge.
+  // `today` is resolved after mount so recency never triggers an SSR/client
+  // hydration mismatch at a day boundary; the liveness probe is a dry run that
+  // writes nothing (the confirmed-dead write stays behind "Discard expired").
+  const liveness = useLivenessProbe();
+  const [today, setToday] = useState<string | null>(null);
+  useEffect(() => {
+    setToday(new Date().toISOString().slice(0, 10));
+  }, []);
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -400,7 +412,8 @@ export function PipelineView({
   const mountedRows = filtered.slice(span.start, span.end);
   const offscreenFailures = offscreenStatusFailures(heldSaves, mountedRows.map((row) => applicationKey(row)));
   // The checkbox, the sortable columns and the resume column.
-  const columnCount = SORT_KEYS.length + 2;
+  // checkbox + sortable columns + evaluated column + resume column
+  const columnCount = SORT_KEYS.length + 3;
   // Same test as the selection bar's selectedRows.length > 0.
   const hasSelection = filtered.some((r) => selected.has(applicationKey(r)));
 
@@ -925,7 +938,7 @@ export function PipelineView({
           <table
             aria-label="Tracked applications"
             aria-rowcount={filtered.length + 1}
-            className="w-full min-w-[44rem] text-sm min-[1440px]:table-fixed min-[1440px]:[&_th:nth-child(1)]:w-11 min-[1440px]:[&_th:nth-child(2)]:w-[4.5rem] min-[1440px]:[&_th:nth-child(3)]:w-[26%] min-[1440px]:[&_th:nth-child(4)]:w-[32%] min-[1440px]:[&_th:nth-child(5)]:w-[5.5rem] min-[1440px]:[&_th:nth-child(6)]:w-[14rem] min-[1440px]:[&_th:nth-child(7)]:w-[6.75rem] min-[1440px]:[&_th:nth-child(8)]:w-[4.75rem]"
+            className="w-full min-w-[44rem] text-sm min-[1440px]:table-fixed min-[1440px]:[&_th:nth-child(1)]:w-11 min-[1440px]:[&_th:nth-child(2)]:w-[4.5rem] min-[1440px]:[&_th:nth-child(3)]:w-[26%] min-[1440px]:[&_th:nth-child(4)]:w-[32%] min-[1440px]:[&_th:nth-child(5)]:w-[5.5rem] min-[1440px]:[&_th:nth-child(6)]:w-[14rem] min-[1440px]:[&_th:nth-child(7)]:w-[6.75rem] min-[1440px]:[&_th:nth-child(8)]:w-[7rem] min-[1440px]:[&_th:nth-child(9)]:w-[4.75rem]"
           >
             <thead className="bg-surface/60 text-left text-xs uppercase tracking-wide text-faint">
               <tr aria-rowindex={1}>
@@ -956,6 +969,7 @@ export function PipelineView({
                     </button>
                   </th>
                 ))}
+                <th className="whitespace-nowrap px-4 py-2.5 font-medium">evaluated</th>
                 <th className="whitespace-nowrap px-4 py-2.5 font-medium">resume</th>
               </tr>
             </thead>
@@ -979,6 +993,8 @@ export function PipelineView({
                     selected={selected.has(key)}
                     isCursor={cursor === index}
                     hasCv={hasCv.has(r.n)}
+                    today={today}
+                    liveness={liveness}
                     detailQuery={detailQuery}
                     heldSave={heldSaves.get(key)}
                     onToggle={toggleRow}
@@ -1032,12 +1048,37 @@ export function PipelineView({
   );
 }
 
+type LivenessState = "active" | "dead" | "uncertain";
+
+const LIVENESS_BADGE: Record<LivenessState, { icon: string; label: string }> = {
+  active: { icon: "✅", label: "Posting still live" },
+  dead: { icon: "❌", label: "Posting closed — eligible to discard" },
+  uncertain: { icon: "⚠️", label: "Could not verify — check manually" },
+};
+
+function LivenessBadge({ status }: { status: LivenessState }) {
+  const badge = LIVENESS_BADGE[status];
+  return (
+    <span
+      role="img"
+      aria-label={badge.label}
+      title={badge.label}
+      data-liveness={status}
+      className="text-[13px] leading-none"
+    >
+      {badge.icon}
+    </span>
+  );
+}
+
 const TrackerRow = memo(function TrackerRow({
   r,
   rowIndex,
   selected,
   isCursor,
   hasCv,
+  today,
+  liveness,
   detailQuery,
   heldSave,
   onToggle,
@@ -1051,6 +1092,8 @@ const TrackerRow = memo(function TrackerRow({
   selected: boolean;
   isCursor: boolean;
   hasCv: boolean;
+  today: string | null;
+  liveness: LivenessProbe | null;
   detailQuery: string;
   heldSave?: { phase: "pending"; status: string } | { phase: "failed"; error: string };
   onToggle: (key: string, shift: boolean) => void;
@@ -1067,6 +1110,8 @@ const TrackerRow = memo(function TrackerRow({
   const key = applicationKey(r);
   const detailHref = `/pipeline/${encodeURIComponent(r.n)}${detailQuery ? `?${detailQuery}` : ""}`;
   const posting = postingHref(r.url);
+  const recency = today ? evaluationRecency(r, today) : null;
+  const livenessState = livenessRowStatus(r, liveness);
   const open = (event: MouseEvent<HTMLAnchorElement>) => onOpen(event, r.n);
   const arm = (event: PointerEvent<HTMLAnchorElement>) => onArm(event, r.n);
   return (
@@ -1128,6 +1173,29 @@ const TrackerRow = memo(function TrackerRow({
         />
       </td>
       <td className="hidden whitespace-nowrap px-4 py-3 text-faint tabular-nums lg:table-cell">{r.date}</td>
+      <td className="whitespace-nowrap px-4 py-3 text-xs" data-testid="pipeline-evaluated">
+        <div className="flex items-center gap-1.5">
+          {livenessState && <LivenessBadge status={livenessState} />}
+          {recency?.lastEvaluated && typeof recency.daysAgo === "number" ? (
+            <span
+              title={`Evaluated ${recency.lastEvaluated}`}
+              className={cn(
+                "tabular-nums",
+                recency.stale ? "text-amber-700 dark:text-amber-400" : "text-faint",
+              )}
+            >
+              {recency.daysAgo === 0
+                ? "today"
+                : recency.daysAgo === 1
+                  ? "1d ago"
+                  : `${recency.daysAgo}d ago`}
+              {recency.stale && " · may have closed"}
+            </span>
+          ) : (
+            <span className="text-faint">—</span>
+          )}
+        </div>
+      </td>
       <td className="whitespace-nowrap px-4 py-3">
         {hasCv ? (
           <a

@@ -657,19 +657,24 @@ export function postingClosedNote(day) {
 }
 
 /**
- * Every tracker row in `statuses` whose posting URL is in `expiredUrls`.
- * Unlike trackerLivenessTargets, this keeps duplicate rows that share a URL
- * so a single expired verdict can discard every Evaluated copy.
+ * Every tracker row in `statuses` whose posting URL is in `urls`. Unlike
+ * trackerLivenessTargets, this keeps duplicate rows that share a URL so a
+ * single verdict maps to every tracker copy of that posting.
+ *
+ * This is the generic URL→row-identity projection. planExpiredDiscards (the
+ * discard planner) and the CLI's `unreadable` projection (AGEN-252) both go
+ * through it, so the web always gets the same {num, company, role, url} shape
+ * whether a posting was confirmed dead or merely unreadable.
  *
  * @param {string} trackerText
- * @param {Iterable<string>} expiredUrls
+ * @param {Iterable<string>} urls
  * @param {{statuses?: string[], reportsRoot?: string}} [options]
  * @returns {{num: number, company: string, role: string, status: string, url: string}[]}
  */
-export function planExpiredDiscards(trackerText, expiredUrls, { statuses = DEFAULT_DISCARD_STATUSES, reportsRoot } = {}) {
+export function trackerRowsForUrls(trackerText, urls, { statuses = DEFAULT_DISCARD_STATUSES, reportsRoot } = {}) {
   const wanted = new Set(statuses.map((s) => s.trim().toLowerCase()).filter(Boolean));
-  const expired = new Set([...expiredUrls].filter(Boolean));
-  if (expired.size === 0 || wanted.size === 0) return [];
+  const targets = new Set([...urls].filter(Boolean));
+  if (targets.size === 0 || wanted.size === 0) return [];
   const lines = String(trackerText ?? '').split(/\r?\n/);
   const colmap = resolveColumns(lines);
   const rows = [];
@@ -677,8 +682,21 @@ export function planExpiredDiscards(trackerText, expiredUrls, { statuses = DEFAU
     const row = parseTrackerRow(line, colmap);
     if (!row || !wanted.has(row.status.trim().toLowerCase())) continue;
     const url = rowPostingUrl(row, reportsRoot);
-    if (!url || !expired.has(url)) continue;
+    if (!url || !targets.has(url)) continue;
     rows.push({ num: row.num, company: row.company, role: row.role, status: row.status, url });
   }
   return rows;
+}
+
+/**
+ * Every tracker row in `statuses` whose posting URL is in `expiredUrls`.
+ * A thin alias over trackerRowsForUrls so the discard call site reads as intent.
+ *
+ * @param {string} trackerText
+ * @param {Iterable<string>} expiredUrls
+ * @param {{statuses?: string[], reportsRoot?: string}} [options]
+ * @returns {{num: number, company: string, role: string, status: string, url: string}[]}
+ */
+export function planExpiredDiscards(trackerText, expiredUrls, options = {}) {
+  return trackerRowsForUrls(trackerText, expiredUrls, options);
 }

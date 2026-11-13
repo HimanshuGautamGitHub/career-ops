@@ -9,6 +9,7 @@ import { ROOT } from './helpers.mjs';
 import { discardExpiredRows } from '../check-liveness.mjs';
 import {
   trackerLivenessTargets,
+  trackerRowsForUrls,
   planExpiredDiscards,
   postingClosedNote,
   DEFAULT_DISCARD_STATUSES,
@@ -81,6 +82,44 @@ test('planExpiredDiscards ignores Applied even when that posting expired', (t) =
   );
   assert.deepEqual(rows.map((row) => row.num), [3, 5]);
   assert.deepEqual(DEFAULT_DISCARD_STATUSES, ['evaluated']);
+});
+
+// AGEN-252: the CLI JSON contract projects `unreadable` URL strings back to
+// tracker row identities ({num, company, role, url}) so the web can flag the
+// exact rows it could not verify. trackerRowsForUrls is that projection; it is
+// the generic planExpiredDiscards delegates to, so it keeps duplicate rows
+// sharing a URL and honours the status filter.
+test('trackerRowsForUrls projects URLs to Evaluated row identities, keeping shared-URL dupes', (t) => {
+  const root = reportsRoot(t);
+  const rows = trackerRowsForUrls(tracker, ['https://jobs.example.test/acme/3'], { reportsRoot: root });
+  assert.deepEqual(
+    rows,
+    [
+      { num: 3, company: 'Acme', role: 'Platform Engineer', status: 'evaluated', url: 'https://jobs.example.test/acme/3' },
+      { num: 5, company: 'Acme', role: 'Platform Engineer', status: 'Evaluated', url: 'https://jobs.example.test/acme/3' },
+    ],
+  );
+});
+
+test('trackerRowsForUrls honours the status filter and ignores unmatched URLs', (t) => {
+  const root = reportsRoot(t);
+  // Applied URL is excluded under the default Evaluated-only filter; a URL no
+  // row carries yields nothing rather than an undefined-field row object.
+  assert.deepEqual(
+    trackerRowsForUrls(tracker, ['https://jobs.example.test/globex/2', 'https://nope.test/x'], { reportsRoot: root }),
+    [],
+  );
+  const applied = trackerRowsForUrls(
+    tracker,
+    ['https://jobs.example.test/globex/2'],
+    { statuses: ['applied'], reportsRoot: root },
+  );
+  assert.deepEqual(applied.map((row) => row.num), [2]);
+});
+
+test('trackerRowsForUrls returns [] for empty input, never throws', () => {
+  assert.deepEqual(trackerRowsForUrls(tracker, []), []);
+  assert.deepEqual(trackerRowsForUrls('', ['https://x.test/1']), []);
 });
 
 test('postingClosedNote stamps the calendar day', () => {
