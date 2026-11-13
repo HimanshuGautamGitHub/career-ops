@@ -11,6 +11,7 @@ import type { DiscoveredOffer } from "@/lib/explore";
 import { DiscoveryCard } from "@/components/explore/discovery-card";
 import { FollowUpCard, type FollowUp } from "@/components/home/follow-up-card";
 import { DecisionCard } from "@/components/home/decision-card";
+import { DiscardExpired } from "@/components/home/discard-expired";
 import type { CardReason } from "@/lib/machine-summary.mjs";
 import { QuickEvaluate } from "@/components/quick-evaluate";
 import { LinkedInPaste } from "@/components/linkedin-paste";
@@ -305,6 +306,7 @@ export function TodayDashboard({
       {/* B. Awaiting your decision */}
       {awaiting.length > 0 && (
         <Section icon={CircleHelp} title="Awaiting your decision" hint="Best score first">
+          <DiscardExpired onChanged={refetch} />
           {applyTarget && (
             <ApplyNext
               n={applyTarget.n}
