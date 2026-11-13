@@ -1,12 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { X, Ban, Clock, MapPin, ChevronDown, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { ATS_LABEL, ATS_SOURCES, cleanChips, type AtsSource, type ExploreFilters } from "@/lib/explore";
+import {
+  ATS_LABEL,
+  ATS_SOURCES,
+  ROLE_TYPES,
+  ROLE_TYPE_LABEL,
+  WORK_SETUPS,
+  WORK_SETUP_LABEL,
+  cleanChips,
+  type AtsSource,
+  type ExploreFilters,
+  type RoleType,
+  type WorkSetup,
+} from "@/lib/explore";
 
 import { CHINA_PRESET, CHINA_SOURCES, EMPLOYER_LABEL } from "@/lib/employer-preset.mjs";
 import type { EmployerSource } from "@/lib/explore";
+import { CITY_SUGGESTIONS } from "@/data/cities.mjs";
 
 const RECENCY = [
   { label: "24h", days: 1 },
@@ -34,13 +47,19 @@ function KeywordField({
   placeholder,
   ariaLabel,
   onChange,
+  suggestions,
 }: {
   values: string[];
   tone: "inc" | "exc";
   placeholder: string;
   ariaLabel?: string;
   onChange: (v: string[]) => void;
+  /** Optional native-datalist typeahead. Used by the location field to offer
+   *  disambiguated "City, Country" options (AGEN-254) while staying free-text —
+   *  a value absent from the list is still typeable. */
+  suggestions?: string[];
 }) {
+  const listId = useId();
   const [draft, setDraft] = useState("");
   // Split only on UNAMBIGUOUS item separators (comma / newline / semicolon) — never
   // bare spaces, which are legitimate inside multi-word entries ("AI platform",
@@ -64,10 +83,14 @@ function KeywordField({
       ))}
       <input
         aria-label={ariaLabel}
+        list={suggestions?.length ? listId : undefined}
         value={draft}
         onChange={(e) => {
           const val = e.target.value;
-          if (/[,\n;\t\r]$/.test(val)) commit(val);
+          // A datalist pick fires onChange with the full chosen value but no
+          // trailing separator, so commit it straight to a chip.
+          if (suggestions?.includes(val)) commit(val);
+          else if (/[,\n;\t\r]$/.test(val)) commit(val);
           else setDraft(val);
         }}
         onKeyDown={(e) => {
@@ -91,6 +114,13 @@ function KeywordField({
         onBlur={() => draft.trim() && commit(draft)}
         placeholder={values.length ? "" : placeholder}
       />
+      {suggestions?.length ? (
+        <datalist id={listId}>
+          {suggestions.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+      ) : null}
     </div>
   );
 }
@@ -122,6 +152,18 @@ export function FilterBuilder({
     const has = filters.ats.includes(a);
     const next = has ? filters.ats.filter((x) => x !== a) : [...filters.ats, a];
     set({ ats: next.length ? next : filters.ats });
+  };
+  // roleType/workSetup toggles — empty collapses to undefined, the codec's
+  // "don't filter on this axis" state (AGEN-254).
+  const toggleRoleType = (r: RoleType) => {
+    const cur = filters.roleType ?? [];
+    const next = cur.includes(r) ? cur.filter((x) => x !== r) : [...cur, r];
+    set({ roleType: next.length ? next : undefined });
+  };
+  const toggleWorkSetup = (w: WorkSetup) => {
+    const cur = filters.workSetup ?? [];
+    const next = cur.includes(w) ? cur.filter((x) => x !== w) : [...cur, w];
+    set({ workSetup: next.length ? next : undefined });
   };
 
   return (
@@ -157,7 +199,7 @@ export function FilterBuilder({
       </div>}
 
       <div>
-        <Label hint="matches any city, region, country, or Remote">
+        <Label hint="pick a City, Country to disambiguate — or type a region or Remote">
           <span className="inline-flex items-center gap-1.5">
             <MapPin className="size-3.5 text-muted" /> City or location
           </span>
@@ -165,11 +207,62 @@ export function FilterBuilder({
         <KeywordField
           values={filters.allow}
           tone="inc"
-          placeholder="Toronto, New York, Remote…"
+          placeholder="Hyderabad, India · New York · Remote…"
           ariaLabel="City or location"
+          suggestions={CITY_SUGGESTIONS}
           onChange={(v) => set({ allow: v })}
         />
       </div>
+
+      {!employer && (
+        <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
+          <div>
+            <Label hint="narrows titles by seniority">Role type</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {ROLE_TYPES.map((r) => {
+                const on = filters.roleType?.includes(r) ?? false;
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleRoleType(r)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors max-sm:min-h-[44px]",
+                      on ? "border-brand/40 bg-brand-soft text-brand-text" : "border-border text-muted hover:text-foreground",
+                    )}
+                  >
+                    {ROLE_TYPE_LABEL[r]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <Label hint="maps onto the location allow-list">Work setup</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {WORK_SETUPS.map((w) => {
+                const on = filters.workSetup?.includes(w) ?? false;
+                return (
+                  <button
+                    key={w}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleWorkSetup(w)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors max-sm:min-h-[44px]",
+                      on ? "border-brand/40 bg-brand-soft text-brand-text" : "border-border text-muted hover:text-foreground",
+                    )}
+                  >
+                    {WORK_SETUP_LABEL[w]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {!employer && <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
         <div className="min-w-[18rem]">
