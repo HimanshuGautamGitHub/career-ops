@@ -1,5 +1,5 @@
 title_filter:
-  positive: ["platform engineer", "devops", "sre", "infrastructure"]
+  positive: ["Human Resource", "HR", "Talent Management", "HR Director"]
   negative: ["intern", "junior"]
 companies:
   - name: ExampleSoft
