@@ -30,7 +30,7 @@ import {
 } from './liveness-browser.mjs';
 import { checkLivenessViaApi } from './liveness-api.mjs';
 import { robotsAllows } from './robots-check.mjs';
-import { planExpiredHistoryRows, trackerLivenessTargets, DEFAULT_TRACKER_STATUSES, planExpiredDiscards, postingClosedNote, DEFAULT_DISCARD_STATUSES, discardableExpiredUrls } from './liveness-core.mjs';
+import { planExpiredHistoryRows, trackerLivenessTargets, trackerRowsForUrls, DEFAULT_TRACKER_STATUSES, planExpiredDiscards, postingClosedNote, DEFAULT_DISCARD_STATUSES, discardableExpiredUrls } from './liveness-core.mjs';
 import { appendToScanHistory, seenJobKey, SCAN_HISTORY_PATH } from './scan.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
@@ -460,12 +460,19 @@ async function main() {
       // `planned` is projected to the identity the route needs (num/company/role/
       // url); confirmed-dead-only is already enforced upstream by
       // discardableExpiredUrls + planExpiredDiscards and is preserved here.
+      // `unreadable` arrives from discardableExpiredUrls as URL strings; project
+      // it to the SAME {num, company, role, url} row shape so the web can flag
+      // the exact Evaluated rows it could not verify (AGEN-252), rather than
+      // the all-undefined objects a raw .map(toRow) over strings produced.
       process.stdout.write(JSON.stringify({
         mode,
         summary: { active, expired, uncertain, viaApi },
         planned: planned.map(({ num, company, role, url }) => ({ num, company, role, url })),
         results,
-        unreadable,
+        unreadable: trackerRowsForUrls(trackerText, unreadable, {
+          statuses: DEFAULT_DISCARD_STATUSES,
+          reportsRoot,
+        }).map(({ num, company, role, url }) => ({ num, company, role, url })),
       }) + '\n');
     }
   }
