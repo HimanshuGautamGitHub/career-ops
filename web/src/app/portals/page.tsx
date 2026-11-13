@@ -1,6 +1,7 @@
 import { Radar } from "lucide-react";
 import path from "node:path";
 import { PortalsView } from "@/components/portals-view";
+import { LastScanSummary } from "@/components/portals/last-scan-summary";
 import { careerOpsRoot, portalsConfigPath } from "@/lib/career-ops";
 import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 import { loadPortalsDocument, watchedCompanies, type WatchedCompany } from "@/lib/portals-config.mjs";
@@ -41,6 +42,9 @@ export default function PortalsPage() {
           Could not read <code>portals.yml</code>: {error}
         </p>
       )}
+      <div className="mt-5">
+        <LastScanSummary />
+      </div>
       <div className="mt-6">
         <PortalsView watched={watched} missing={missing} target={target} />
       </div>
