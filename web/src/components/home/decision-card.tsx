@@ -9,6 +9,7 @@ import { CompanyLogo } from "@/components/company-logo";
 import { scoreNum, scoreTone } from "@/lib/format";
 import { companyPresentation } from "@/lib/company-presentation.mjs";
 import { statusWriteError } from "@/lib/home/status-result.mjs";
+import { evaluationRecency } from "@/lib/evaluation-recency.mjs";
 import { appliedWriteAllowed } from "@/lib/applied-confirm.mjs";
 import type { Application } from "@/lib/career-ops";
 import type { CardReason } from "@/lib/machine-summary.mjs";
@@ -36,6 +37,13 @@ export function DecisionCard({ app, reason, onDecided }: { app: Application; rea
     if (!askApplied) return;
     appliedYesRef.current?.focus();
   }, [askApplied]);
+  // Resolve "today" after mount so the recency line never causes an SSR/client
+  // hydration mismatch at a midnight boundary.
+  const [today, setToday] = useState<string | null>(null);
+  useEffect(() => {
+    setToday(new Date().toISOString().slice(0, 10));
+  }, []);
+  const recency = today ? evaluationRecency(app, today) : null;
   const score = scoreNum(app.score);
   const tone = scoreTone(app.score);
   const company = companyPresentation(app);
@@ -94,6 +102,15 @@ export function DecisionCard({ app, reason, onDecided }: { app: Application; rea
           {reason.plus && <p className="line-clamp-1 text-muted"><span className="text-emerald-800 dark:text-emerald-400">+</span> {reason.plus}</p>}
           {reason.minus && <p className="line-clamp-1 text-muted"><span className="text-red-700 dark:text-red-400">−</span> {reason.minus}</p>}
         </div>
+      )}
+      {recency?.lastEvaluated && typeof recency.daysAgo === "number" && (
+        <p
+          data-testid="card-recency"
+          className={cn("text-[11px]", recency.stale ? "text-amber-700 dark:text-amber-400" : "text-faint")}
+        >
+          Evaluated {recency.daysAgo === 0 ? "today" : recency.daysAgo === 1 ? "yesterday" : `${recency.daysAgo} days ago`}
+          {recency.stale && " · may have closed"}
+        </p>
       )}
       <div className="flex items-center gap-2">
         {/* Primary is the report (PDF + Apply live there). Marking Applied from
