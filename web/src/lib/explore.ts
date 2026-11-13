@@ -51,21 +51,9 @@ export const ROLE_TYPE_LABEL: Record<RoleType, string> = {
   "c-level": "C-level",
 };
 
-/** Keywords a RoleType injects into title_filter.positive. The value itself is
- *  the default; multi-word / ambiguous families get hand-picked substrings. */
-export const ROLE_TYPE_KEYWORDS: Record<RoleType, string[]> = {
-  intern: ["intern"],
-  junior: ["junior"],
-  mid: ["mid-level", "mid level"],
-  senior: ["senior"],
-  staff: ["staff"],
-  principal: ["principal"],
-  lead: ["lead"],
-  manager: ["manager"],
-  director: ["director"],
-  vp: ["vice president", "vp"],
-  "c-level": ["chief", "cto", "ceo", "cfo"],
-};
+/** Keywords a RoleType injects into title_filter.positive — the single source
+ *  of truth is explore-expand.mjs (shared with the scheduled runner). */
+export const ROLE_TYPE_KEYWORDS: Record<RoleType, string[]> = ROLE_TYPE_KEYWORDS_JS;
 
 /** Work-setup preference (AGEN-254). Multi-select: both remote and hybrid is
  *  ["remote", "hybrid"]. Maps onto the location allow list only — the
@@ -81,14 +69,10 @@ export const WORK_SETUP_LABEL: Record<WorkSetup, string> = {
   onsite: "In-office",
 };
 
-/** Location allow-list entries a WorkSetup adds. "onsite" is the absence of a
- *  remote/hybrid signal, so it adds nothing — the location allow/block already
- *  governs it. */
-export const WORK_SETUP_ALLOW: Record<WorkSetup, string[]> = {
-  remote: ["Remote", "Worldwide"],
-  hybrid: ["Hybrid"],
-  onsite: [],
-};
+/** Location allow-list entries a WorkSetup adds — the single source of truth is
+ *  explore-expand.mjs (shared with the scheduled runner). "onsite" adds nothing;
+ *  the location allow/block already governs it. */
+export const WORK_SETUP_ALLOW: Record<WorkSetup, string[]> = WORK_SETUP_ALLOW_JS;
 
 /** The full UI filter state. The keyword/location lists mirror scan.mjs's
  *  buildTitleFilter / buildLocationFilter semantics; sinceDays/ats/limitPerAts map
@@ -199,6 +183,16 @@ export type ScanEvent =
 import { cleanChips } from "./clean-chips.mjs";
 export { cleanChips };
 
+// The roleType/workSetup keyword maps and the fold live in explore-expand.mjs
+// (plain JS) so the scheduled-jobs runner — which runs as plain `node` with no
+// bundler and cannot import this .ts — shares one source of truth with the
+// Explorer path. Re-exported here with their TS types for existing consumers.
+import {
+  ROLE_TYPE_KEYWORDS as ROLE_TYPE_KEYWORDS_JS,
+  WORK_SETUP_ALLOW as WORK_SETUP_ALLOW_JS,
+  expandFiltersForScan as expandFiltersForScanJs,
+} from "./explore-expand.mjs";
+
 function clampNum(v: unknown, lo: number, hi: number, fallback: number): number {
   const n = Number(v);
   if (!Number.isFinite(n)) return fallback;
@@ -264,16 +258,7 @@ function cleanEnumList<T extends string>(v: unknown, allowed: readonly T[]): T[]
  *  workSetup APPENDS allow-list entries. Both are additive — the user's explicit
  *  chips always survive — idempotent, and case-insensitively de-duped via
  *  cleanChips. Returns a new object; the input is never mutated. */
-export function expandFiltersForScan(f: ExploreFilters): ExploreFilters {
-  if (!f.roleType?.length && !f.workSetup?.length) return f;
-  const positive = f.roleType?.length
-    ? cleanChips([...f.positive, ...f.roleType.flatMap((r) => ROLE_TYPE_KEYWORDS[r] ?? [r])])
-    : f.positive;
-  const allow = f.workSetup?.length
-    ? cleanChips([...f.allow, ...f.workSetup.flatMap((w) => WORK_SETUP_ALLOW[w] ?? [])])
-    : f.allow;
-  return { ...f, positive, allow };
-}
+export const expandFiltersForScan: (f: ExploreFilters) => ExploreFilters = expandFiltersForScanJs;
 
 /** URL <-> filters codec (so a search is shareable/restorable). */
 export function filtersToParams(f: ExploreFilters): string {
