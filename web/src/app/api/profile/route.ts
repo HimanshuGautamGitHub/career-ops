@@ -8,6 +8,7 @@ import { atomicWriteWithBackup } from "@/lib/core/safe-write";
 import { getProfilePath } from "@/lib/core/profile-path.mjs";
 import { isMapping } from "@/lib/portals-config.mjs";
 import { firstProfileText, patchProfileText } from "@/lib/profile-yaml-edit.mjs";
+import { profileToForm } from "@/lib/profile-form.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,6 +60,23 @@ function patchToProfile(p: ProfilePatch): Record<string, unknown> {
   // seniority intentionally not written (no canonical home in profile.yml);
   // archetypes/narrative live in modes/_profile.md — this writer never touches them.
   return out;
+}
+
+// Read-only pre-fill for the Preferences form. Returns the flat field shape
+// the form binds to (the inverse of patchToProfile), or blank defaults when no
+// profile.yml exists yet. Never seeds or writes — that is POST's job alone.
+export async function GET() {
+  try {
+    const file = getProfilePath(careerOpsRoot());
+    if (!fs.existsSync(file)) {
+      return Response.json({ profile: profileToForm(null) });
+    }
+    const parsed = yaml.load(fs.readFileSync(file, "utf8"));
+    return Response.json({ profile: profileToForm(parsed) });
+  } catch {
+    // A malformed profile must not break the settings screen — fall back to blanks.
+    return Response.json({ profile: profileToForm(null) });
+  }
 }
 
 export async function POST(req: Request) {
