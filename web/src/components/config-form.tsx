@@ -11,6 +11,8 @@ import {
 import { cn } from "@/lib/cn";
 import { CadenceSettings } from "@/components/followups/cadence-settings";
 import { TemplatesSection } from "@/components/templates/templates-section";
+import { PreferencesSection } from "@/components/config/preferences-section";
+import { BlacklistSection } from "@/components/config/blacklist-section";
 import { persistCliId, readSavedCliId } from "@/lib/saved-cli";
 import { keepIfInstalled, pickDefaultInstalled } from "@/lib/cli-pick.mjs";
 import { CONFIG_KEY as STORAGE_KEY, writeConfig } from "@/lib/config-events.mjs";
@@ -107,8 +109,10 @@ export function ConfigForm() {
         Run career-ops on your own AI, right on your computer. Your CV and data never leave your machine.
       </p>
 
+      <PreferencesSection />
+
       {/* Engine mode */}
-      <label className="mt-8 mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+      <label className="mt-10 mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
         AI Engine
       </label>
       <div>
@@ -267,8 +271,10 @@ export function ConfigForm() {
         )}
       </div>
 
+      <BlacklistSection />
+
       {/* Appearance / privacy */}
-      <label className="mt-8 mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+      <label className="mt-10 mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
         Appearance
       </label>
       <button

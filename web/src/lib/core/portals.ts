@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import * as yaml from "js-yaml";
 import { careerOpsRoot } from "@/lib/career-ops";
-import { DEFAULT_FILTERS, cleanChips, type ExploreFilters } from "@/lib/explore";
+import { DEFAULT_FILTERS, cleanChips, expandFiltersForScan, type ExploreFilters } from "@/lib/explore";
 import { profileTargetKeywords } from "@/lib/profile-keywords.mjs";
 import { getProfilePath } from "@/lib/core/profile-path.mjs";
 import { workplacePolicyConfig } from "./workplace-policy.mjs";
@@ -36,11 +36,15 @@ export { serializePortals } from "./portals-serialize.mjs";
 import { serializePortals } from "./portals-serialize.mjs";
 
 /** Write the ephemeral filter file to a temp path; caller cleans it up. */
-export function writeTempPortals(f: FilterLists): string {
+export function writeTempPortals(f: FilterLists & Partial<Pick<ExploreFilters, "roleType" | "workSetup">>): string {
   const file = path.join(os.tmpdir(), `career-ops-explore-${randomUUID()}.yml`);
+  // Fold the coarse roleType/workSetup axes into the keyword/location lists so
+  // the scanner, which only reads title/location filters, honors them. Additive
+  // and a no-op when both are unset (AGEN-254).
+  const expanded = expandFiltersForScan(f as ExploreFilters);
   // Conditional workplace policy is a profile constraint, not a search chip.
   // Keep it in ad-hoc scans too; malformed config must not disable the guard.
-  let text = serializePortals(f);
+  let text = serializePortals(expanded);
   let policy: unknown;
   try {
     const parsed = yaml.load(fs.readFileSync(path.join(careerOpsRoot(), "portals.yml"), "utf8"));

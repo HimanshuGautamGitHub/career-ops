@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CalendarPlus, Loader2, Sparkles, X } from "lucide-react";
 import type { ScanEngine } from "@/lib/scheduled-jobs";
 import { DEFAULT_FILTERS, type ExploreFilters } from "@/lib/explore";
@@ -28,9 +28,40 @@ export function CreateJobModal({
     positive: [],
     negative: [],
   });
+  const [seededFrom, setSeededFrom] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
+  // The modal starts blank; seed it from the user's saved portals.yml / profile.yml
+  // defaults the first time each open shows it, matching the Explorer page's
+  // server-side seed (AGEN-254). seedExploreFilters is fs-bound, so a client
+  // component reaches it through the /api/explore/seed GET route. A bare checkout
+  // or a failed fetch leaves the blank DEFAULT_FILTERS in place.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      seeded.current = false;
+      return;
+    }
+    if (seeded.current) return;
+    seeded.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/explore/seed");
+        if (!res.ok) return;
+        const data = (await res.json()) as { filters?: ExploreFilters; seededFrom?: string[] };
+        if (cancelled || !data.filters) return;
+        setFilters(data.filters);
+        setSeededFrom(Array.isArray(data.seededFrom) ? data.seededFrom : []);
+      } catch {
+        /* keep DEFAULT_FILTERS — seeding is a convenience, not a requirement */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -132,7 +163,7 @@ export function CreateJobModal({
 
           {/* ─── Reuse FilterBuilder from Explore ─── */}
           <div className="rounded-xl border border-border bg-surface/30 p-4">
-            <FilterBuilder filters={filters} onChange={setFilters} />
+            <FilterBuilder filters={filters} onChange={setFilters} seededFrom={seededFrom} />
           </div>
 
           {/* ─── Actions ─── */}
