@@ -155,6 +155,11 @@ export function blacklistEntryError(entry) {
     if (typeof v === "string" && v.includes("|")) {
       return `${field} must not contain a '|' character (it would corrupt the table)`;
     }
+    // A newline would split one entry across rows and desync the table; the
+    // parser reads each row as a single line, so reject it at the boundary too.
+    if (typeof v === "string" && /[\n\r]/.test(v)) {
+      return `${field} must not contain a line break (it would corrupt the table)`;
+    }
   }
   return null;
 }

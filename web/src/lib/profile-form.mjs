@@ -27,7 +27,7 @@ function parseCompRange(raw) {
 
 /**
  * @param {unknown} obj Parsed profile.yml (or null/undefined when absent).
- * @returns {{name:string,email:string,location:string,roles:string[],compMin:number|null,compMax:number|null,compRange:string,currency:string,remote:string}}
+ * @returns {{name:string,email:string,location:string,roles:string[],compMin:number|null,compMax:number|null,compRange:string,currency:string,remote:string,city:string,country:string,workSetup:string,seniority:string}}
  */
 export function profileToForm(obj) {
   const root = isObj(obj) ? obj : {};
@@ -44,6 +44,21 @@ export function profileToForm(obj) {
 
   const { compMin, compMax, compRange } = parseCompRange(comp.target_range);
 
+  // Structured top-level location block (AGEN-249) — distinct from the
+  // free-text candidate.location string the form also surfaces.
+  const location = isObj(root.location) ? root.location : {};
+
+  // seniority mirrors the first archetype's level (the one the writer edits).
+  let seniority = "";
+  if (isObj(targetRoles) && Array.isArray(targetRoles.archetypes) && isObj(targetRoles.archetypes[0])) {
+    seniority = str(targetRoles.archetypes[0].level);
+  }
+
+  // Only surface a canonical work_setup; an out-of-enum value reads as blank so
+  // the form never renders a non-selectable option.
+  const rawWorkSetup = str(root.work_setup).trim();
+  const workSetup = ["remote", "hybrid", "onsite"].includes(rawWorkSetup) ? rawWorkSetup : "";
+
   return {
     name: str(candidate.full_name),
     email: str(candidate.email),
@@ -54,5 +69,9 @@ export function profileToForm(obj) {
     compRange,
     currency: str(comp.currency),
     remote: str(comp.location_flexibility),
+    city: str(location.city),
+    country: str(location.country),
+    workSetup,
+    seniority,
   };
 }

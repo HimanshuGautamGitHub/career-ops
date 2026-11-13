@@ -46,3 +46,34 @@ test("profileToForm tolerates a primary roles string instead of a list", () => {
   const form = profileToForm({ target_roles: { primary: "Backend Engineer" } });
   assert.deepEqual(form.roles, ["Backend Engineer"]);
 });
+
+test("profileToForm surfaces the AGEN-249 structured fields (location block, work_setup, first archetype level)", () => {
+  const form = profileToForm({
+    location: { city: "Berlin", country: "Germany" },
+    work_setup: "hybrid",
+    target_roles: {
+      archetypes: [
+        { name: "Applied AI", level: "Staff", fit: "primary" },
+        { name: "Platform", level: "Senior", fit: "secondary" },
+      ],
+    },
+  });
+  assert.equal(form.city, "Berlin");
+  assert.equal(form.country, "Germany");
+  assert.equal(form.workSetup, "hybrid");
+  // seniority mirrors ONLY the first archetype's level.
+  assert.equal(form.seniority, "Staff");
+});
+
+test("profileToForm blanks an out-of-enum work_setup so the form never renders a non-selectable option", () => {
+  const form = profileToForm({ work_setup: "whenever" });
+  assert.equal(form.workSetup, "");
+});
+
+test("profileToForm leaves the structured fields blank when absent", () => {
+  const form = profileToForm({ candidate: { full_name: "Jane" } });
+  assert.equal(form.city, "");
+  assert.equal(form.country, "");
+  assert.equal(form.workSetup, "");
+  assert.equal(form.seniority, "");
+});
