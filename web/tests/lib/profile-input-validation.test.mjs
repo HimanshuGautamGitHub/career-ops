@@ -61,6 +61,11 @@ for (const [name, body] of [
   ["reversed range", '{"compMin":200,"compMax":100}'],
   ["object currency", '{"currency":{}}'],
   ["array remote", '{"remote":[]}'],
+  ["numeric city", '{"city":42}'],
+  ["boolean country", '{"country":true}'],
+  ["numeric workSetup", '{"workSetup":42}'],
+  ["out-of-enum workSetup", '{"workSetup":"whenever"}'],
+  ["object seniority", '{"seniority":{}}'],
 ]) {
   test(`${name} returns 400 without changing any files`, async (t) => {
     const { response, file, config } = await fixture(t, body);
@@ -100,4 +105,60 @@ test("valid partial updates retain unrelated settings and exact-byte backup", as
   const backups = readdirSync(config).filter((f) => f.startsWith("profile.yml.bak-"));
   assert.equal(backups.length, 1);
   assert.equal(readFileSync(path.join(config, backups[0]), "utf8"), source);
+});
+
+test("city/country write the structured top-level location block; a valid work_setup writes the top-level key", async (t) => {
+  const { response, file } = await fixture(t, JSON.stringify({
+    city: "Berlin", country: "Germany", workSetup: "hybrid",
+  }));
+  assert.equal(response.status, 200);
+  const written = yaml.load(readFileSync(file, "utf8"));
+  assert.deepEqual(written.location, { city: "Berlin", country: "Germany" });
+  assert.equal(written.work_setup, "hybrid");
+  // The free-text candidate.location is left untouched — it is a different axis.
+  assert.equal(written.candidate.location, undefined);
+});
+
+// seniority has no profile to edit here (the fixture has no archetypes), so it is
+// a no-op field: on its own it is "nothing to write", never a fabricated archetype.
+test("a seniority-only update with no existing archetypes is a 400 and writes nothing", async (t) => {
+  const { response, file } = await fixture(t, JSON.stringify({ seniority: "Staff" }));
+  assert.equal(response.status, 400);
+  assert.equal(readFileSync(file, "utf8"), source);
+});
+
+test("seniority updates ONLY the first archetype's level, preserving the others and their fields", async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "profile-seniority-"));
+  const previous = process.env.CAREER_OPS_ROOT;
+  process.env.CAREER_OPS_ROOT = root;
+  t.after(() => {
+    if (previous === undefined) delete process.env.CAREER_OPS_ROOT;
+    else process.env.CAREER_OPS_ROOT = previous;
+    rmSync(root, { recursive: true, force: true });
+  });
+  const config = path.join(root, "config");
+  mkdirSync(config);
+  const file = path.join(config, "profile.yml");
+  writeFileSync(
+    file,
+    yaml.dump({
+      candidate: { full_name: "Jane" },
+      target_roles: {
+        archetypes: [
+          { name: "Applied AI", level: "Senior", fit: "primary" },
+          { name: "Platform", level: "Senior", fit: "secondary" },
+        ],
+      },
+    }),
+  );
+  const response = await POST(new Request("http://fixture.invalid/api/profile", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ seniority: "Staff" }),
+  }));
+  assert.equal(response.status, 200);
+  const written = yaml.load(readFileSync(file, "utf8"));
+  assert.deepEqual(written.target_roles.archetypes, [
+    { name: "Applied AI", level: "Staff", fit: "primary" },
+    { name: "Platform", level: "Senior", fit: "secondary" },
+  ]);
 });

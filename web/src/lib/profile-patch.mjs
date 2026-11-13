@@ -6,10 +6,14 @@ export function profilePatchError(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return "profile update must be an object";
   }
-  for (const field of ["name", "email", "location", "currency", "remote"]) {
+  for (const field of ["name", "email", "location", "currency", "remote", "city", "country", "workSetup", "seniority"]) {
     if (field in value && typeof value[field] !== "string") {
       return `${field} must be a string`;
     }
+  }
+  if ("workSetup" in value && typeof value.workSetup === "string" && value.workSetup.trim() &&
+      !["remote", "hybrid", "onsite"].includes(value.workSetup.trim())) {
+    return 'workSetup must be one of "remote", "hybrid", "onsite"';
   }
   if ("roles" in value && (!Array.isArray(value.roles) || value.roles.some((role) => typeof role !== "string"))) {
     return "roles must be an array of strings";
