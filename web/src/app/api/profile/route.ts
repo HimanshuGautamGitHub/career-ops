@@ -29,7 +29,16 @@ type ProfilePatch = {
   compMax?: number;
   currency?: string;
   remote?: string;
+  city?: string; // writes location.city (structured location block)
+  country?: string; // writes location.country (structured location block)
+  workSetup?: string; // writes top-level work_setup ("remote" | "hybrid" | "onsite")
+  seniority?: string; // writes target_roles.archetypes[0].level (additive, first archetype only)
 };
+
+// AGEN-249 contract: the three canonical work-setup values. A value outside this
+// set is dropped rather than written, so the Explore/Schedule seeder never reads
+// a non-enum work_setup out of profile.yml.
+const WORK_SETUP_VALUES = ["remote", "hybrid", "onsite"] as const;
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -57,8 +66,20 @@ function patchToProfile(p: ProfilePatch): Record<string, unknown> {
   if (p.currency) comp.currency = p.currency;
   if (p.remote) comp.location_flexibility = p.remote;
   if (Object.keys(comp).length) out.compensation = comp;
-  // seniority intentionally not written (no canonical home in profile.yml);
-  // archetypes/narrative live in modes/_profile.md — this writer never touches them.
+  // location — split city/country into the structured top-level location block
+  // (candidate.location stays the free-text, backward-compat string above).
+  const loc: Record<string, unknown> = {};
+  if (p.city) loc.city = p.city;
+  if (p.country) loc.country = p.country;
+  if (Object.keys(loc).length) out.location = loc;
+  // work_setup — top-level key, not nested under location or compensation.
+  if (p.workSetup && (WORK_SETUP_VALUES as readonly string[]).includes(p.workSetup)) {
+    out.work_setup = p.workSetup;
+  }
+  // seniority → target_roles.archetypes[0].level is applied in POST, where the
+  // base profile is available: it updates the FIRST existing archetype's level
+  // only and NEVER creates archetypes from scratch (that is onboard-write.mjs /
+  // modes/_profile.md territory).
   return out;
 }
 
@@ -89,7 +110,17 @@ export async function POST(req: Request) {
   const error = profilePatchError(payload);
   if (error) return Response.json({ error }, { status: 400 });
   const proposed = patchToProfile(payload as ProfilePatch);
-  if (Object.keys(proposed).length === 0) return Response.json({ error: "nothing to write" }, { status: 400 });
+  // seniority writes nothing on its own (it edits an existing archetype, resolved
+  // below once base is loaded), so defer the real "nothing to write" verdict until
+  // after that. Reject here only when there is neither a direct field nor a
+  // pending seniority edit.
+  const seniority =
+    typeof (payload as ProfilePatch).seniority === "string"
+      ? (payload as ProfilePatch).seniority!.trim()
+      : "";
+  if (Object.keys(proposed).length === 0 && !seniority) {
+    return Response.json({ error: "nothing to write" }, { status: 400 });
+  }
 
   const root = careerOpsRoot();
   const file = getProfilePath(root);
@@ -122,6 +153,23 @@ export async function POST(req: Request) {
       return Response.json({ error: "config/profile.yml must contain named settings, not a list or single value. Refusing to overwrite it." }, { status: 409 });
     }
     base = parsed as Record<string, unknown>;
+  }
+
+  // seniority updates the FIRST existing archetype's level only — additive, and
+  // never creates the archetypes block (AGEN-249: that is modes/_profile.md /
+  // onboarding territory). Build the full array so the deep-merge below replaces
+  // it wholesale without dropping the other archetypes or their name/fit fields.
+  if (seniority) {
+    const tr = isObj(base.target_roles) ? base.target_roles : null;
+    const archetypes = tr && Array.isArray(tr.archetypes) ? tr.archetypes : null;
+    if (archetypes && archetypes.length && isObj(archetypes[0])) {
+      const updated = archetypes.map((a, i) => (i === 0 && isObj(a) ? { ...a, level: seniority } : a));
+      const existingTarget = isObj(proposed.target_roles) ? proposed.target_roles : {};
+      proposed.target_roles = { ...existingTarget, archetypes: updated };
+    }
+  }
+  if (Object.keys(proposed).length === 0) {
+    return Response.json({ error: "nothing to write" }, { status: 400 });
   }
 
   const merged = deepMerge(base, proposed);
