@@ -55,8 +55,15 @@ const USAGE = `Usage:
 
 const KNOWN_FLAGS = [
   '--no-fallback', '--throttle', '--no-record', '--file', '--tracker', '--status',
-  '--discard-expired', '--apply', '--help', '-h',
+  '--discard-expired', '--apply', '--json', '--help', '-h',
 ];
+
+// --json makes stdout a single machine-readable JSON object (consumed by the
+// web route POST /api/liveness/discard). Every human-facing console.log goes
+// through say() so --json can suppress it and keep stdout pure JSON; errors
+// still go to console.error (stderr). Set true in main() when --json is passed.
+let JSON_OUT = false;
+const say = (...args) => { if (!JSON_OUT) console.log(...args); };
 
 /**
  * `--throttle` alone means the 5000ms default. `--throttle 1000` and
@@ -232,6 +239,8 @@ async function main() {
     valueFlags: ['--file', '--status', '--throttle'],
   });
 
+  JSON_OUT = args.includes('--json');
+
   if (hasFlag(args, '--file')) {
     const filePath = flagValue(args, '--file');
     if (typeof filePath !== 'string' || !filePath.trim() || filePath.startsWith('--')) {
@@ -299,7 +308,7 @@ async function main() {
     trackerText = readFileSync(trackerPath, 'utf-8');
     const statuses = statusGiven ? statusValue.split(',').map((s) => s.trim()).filter(Boolean) : DEFAULT_TRACKER_STATUSES;
     const { targets, noUrl } = trackerLivenessTargets(trackerText, { statuses, reportsRoot });
-    console.log(`Tracker rows with status ${statuses.join(' or ')}: ${targets.length} with a posting URL${noUrl.length ? `, ${noUrl.length} without (${noUrl.map((n) => `#${n}`).join(' ')})` : ''}`);
+    say(`Tracker rows with status ${statuses.join(' or ')}: ${targets.length} with a posting URL${noUrl.length ? `, ${noUrl.length} without (${noUrl.map((n) => `#${n}`).join(' ')})` : ''}`);
     for (const t of targets) labels.set(t.url, `#${t.num} ${t.company} · ${t.role} (${t.status})`);
     urls = targets.map((t) => t.url);
   } else if (hasFlag(args, '--file')) {
@@ -314,7 +323,7 @@ async function main() {
     throttleBaseMs ? `throttle ~${throttleBaseMs / 1000}-${(throttleBaseMs * 2) / 1000}s` : null,
     record ? null : 'no-record',
   ].filter(Boolean);
-  console.log(`Checking ${urls.length} URL(s)...${notes.length ? ` (${notes.join(', ')})` : ''}\n`);
+  say(`Checking ${urls.length} URL(s)...${notes.length ? ` (${notes.join(', ')})` : ''}\n`);
 
   // Lazy browser: the API rung resolves ATS postings with no browser at all, so we
   // only launch Playwright if a URL actually needs the fallback.
@@ -381,8 +390,8 @@ async function main() {
     }
 
     const icon = { active: '✅', expired: '❌', uncertain: '⚠️' }[result];
-    console.log(`${icon} ${result.padEnd(10)} ${api ? '(api) ' : '      '}${labels.has(url) ? `${labels.get(url)}  ` : ''}${url}`);
-    if (result !== 'active') console.log(`           ${reason}`);
+    say(`${icon} ${result.padEnd(10)} ${api ? '(api) ' : '      '}${labels.has(url) ? `${labels.get(url)}  ` : ''}${url}`);
+    if (result !== 'active') say(`           ${reason}`);
     if (result === 'active') active++;
     else if (result === 'expired') expired++;
     else uncertain++;
@@ -392,16 +401,16 @@ async function main() {
   if (headed) await headed.close();
   if (browser) await browser.close();
 
-  console.log(`\nResults: ${active} active  ${expired} expired  ${uncertain} uncertain  (${viaApi} via API, no browser)`);
+  say(`\nResults: ${active} active  ${expired} expired  ${uncertain} uncertain  (${viaApi} via API, no browser)`);
   const quietBlocks = takeSuppressedBlockCount();
-  if (quietBlocks) console.log(`(${quietBlocks} tracker/analytics requests skipped: their host had no usable address, e.g. a DNS ad-blocker; not counted against any posting)`);
+  if (quietBlocks) say(`(${quietBlocks} tracker/analytics requests skipped: their host had no usable address, e.g. a DNS ad-blocker; not counted against any posting)`);
 
   // Close the loop: the verdict is the expensive part of this run and it used
   // to die with the process. `--no-record` leaves no trace, so the write is
   // skipped entirely rather than computed and thrown away.
   if (record) {
     const recorded = await recordExpiredVerdicts(verdicts);
-    if (recorded > 0) console.log(`Recorded ${recorded} expired posting(s) in ${SCAN_HISTORY_PATH}`);
+    if (recorded > 0) say(`Recorded ${recorded} expired posting(s) in ${SCAN_HISTORY_PATH}`);
   }
 
   if (discardExpired) {
@@ -411,37 +420,53 @@ async function main() {
     // the tracker — see isClosureEvidence().
     const { closed: expiredUrls, unreadable } = discardableExpiredUrls(verdicts);
     if (unreadable.length > 0) {
-      console.log(`\nDiscard expired: ${unreadable.length} page(s) could not be read and were left as they are `
+      say(`\nDiscard expired: ${unreadable.length} page(s) could not be read and were left as they are `
         + '(an unreadable page is unconfirmed, not closed):');
-      for (const url of unreadable) console.log(`  · ${url}`);
+      for (const url of unreadable) say(`  · ${url}`);
     }
     const planned = planExpiredDiscards(trackerText, expiredUrls, {
       statuses: DEFAULT_DISCARD_STATUSES,
       reportsRoot,
     });
     const note = postingClosedNote(localToday());
+    // dry-run vs apply is known before any row is planned, so the JSON contract
+    // always carries a mode even when nothing matched.
+    const mode = applyDiscards ? 'apply' : 'dry-run';
+    let results = [];
     if (planned.length === 0) {
-      console.log('\nDiscard expired: no Evaluated rows matched an expired posting.');
+      say('\nDiscard expired: no Evaluated rows matched an expired posting.');
     } else {
-      const mode = applyDiscards ? 'apply' : 'dry-run';
-      console.log(`\nDiscard expired (${mode}): ${planned.length} Evaluated row(s) → Discarded`);
-      const results = discardExpiredRows(planned, { apply: applyDiscards, note, trackerPath, reportsRoot });
+      say(`\nDiscard expired (${mode}): ${planned.length} Evaluated row(s) → Discarded`);
+      results = discardExpiredRows(planned, { apply: applyDiscards, note, trackerPath, reportsRoot });
       for (const r of results) {
         if (r.skipped) {
-          console.log(`  · #${r.num} ${r.company} · ${r.role} — skipped, ${r.skipped}`);
+          say(`  · #${r.num} ${r.company} · ${r.role} — skipped, ${r.skipped}`);
           continue;
         }
         if (r.error) {
-          console.log(`  ❌ #${r.num} ${r.company} · ${r.role} — ${r.error}`);
+          say(`  ❌ #${r.num} ${r.company} · ${r.role} — ${r.error}`);
           process.exitCode = 1;
           continue;
         }
         const verb = r.dryRun ? 'would discard' : (r.changed ? 'discarded' : 'already Discarded');
-        console.log(`  ${r.dryRun ? '·' : '✅'} #${r.num} ${r.company} · ${r.role} — ${verb} (${note})`);
+        say(`  ${r.dryRun ? '·' : '✅'} #${r.num} ${r.company} · ${r.role} — ${verb} (${note})`);
       }
       if (!applyDiscards) {
-        console.log('Re-run with --apply to write. Uncertain and Applied rows are left alone.');
+        say('Re-run with --apply to write. Uncertain and Applied rows are left alone.');
       }
+    }
+    if (JSON_OUT) {
+      // One JSON object on stdout — the machine contract the web route parses.
+      // `planned` is projected to the identity the route needs (num/company/role/
+      // url); confirmed-dead-only is already enforced upstream by
+      // discardableExpiredUrls + planExpiredDiscards and is preserved here.
+      process.stdout.write(JSON.stringify({
+        mode,
+        summary: { active, expired, uncertain, viaApi },
+        planned: planned.map(({ num, company, role, url }) => ({ num, company, role, url })),
+        results,
+        unreadable,
+      }) + '\n');
     }
   }
 
