@@ -45,6 +45,18 @@ export function editingAfterReload(editing, templates) {
 }
 
 /**
+ * The template open in the preview modal, or null once it is gone from the
+ * reloaded list (edited away or deleted). Left set, the modal would keep a stale
+ * preview open, or reopen when a template with that name reappeared.
+ * @param {string | null} previewing
+ * @param {{name: string}[]} templates
+ * @returns {string | null}
+ */
+export function previewAfterReload(previewing, templates) {
+  return previewing && templates.some((t) => t.name === previewing) ? previewing : null;
+}
+
+/**
  * Save a chosen default and settle the screen. On success the choice is applied
  * and a newer reload starts, so latestOnly discards an earlier in-flight response
  * that captured the old default. On failure nothing is applied or reloaded.
