@@ -144,6 +144,37 @@ export function extractRolesFound(engine, stdout) {
   return match ? Number(match[1]) : 0;
 }
 
+// Cap on how many role identities a run record retains, to keep
+// data/scheduled-jobs.json bounded on large sweeps. rolesFound stays the
+// full count; this only bounds the per-role detail list.
+export const MAX_ROLES = 50;
+
+// Maps the full-scan --json offers[] (title/company/url) into the
+// JobRun.roles contract. Portals runs emit no JSON offers and unparseable
+// stdout yields nothing, so both return [] (count-only render downstream).
+export function extractRoles(engine, stdout) {
+  if (engine !== "full") return [];
+  let result;
+  try {
+    result = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  const offers = result && Array.isArray(result.offers) ? result.offers : [];
+  const roles = [];
+  for (const offer of offers) {
+    if (!offer || typeof offer !== "object") continue;
+    const title = typeof offer.title === "string" ? offer.title.trim() : "";
+    if (!title) continue;
+    const role = { title };
+    if (typeof offer.company === "string" && offer.company.trim()) role.company = offer.company.trim();
+    if (typeof offer.url === "string" && offer.url.trim()) role.url = offer.url.trim();
+    roles.push(role);
+    if (roles.length >= MAX_ROLES) break;
+  }
+  return roles;
+}
+
 function writeJobPortals(root, job) {
   if (!isSafeScheduledId(job.id)) throw new Error("Invalid scheduled job identifier.");
   const portalsPath = path.join(root, "portals.yml");
@@ -330,6 +361,7 @@ export function executeJob(root, job, options = {}) {
               state: "success",
               attempt,
               rolesFound,
+              roles: extractRoles(engine, result.stdout || ""),
               durationMs: Date.now() - startedAt,
               message: `Scan finished with ${rolesFound} matching role${rolesFound === 1 ? "" : "s"}.`,
             };
@@ -366,6 +398,7 @@ export function executeJob(root, job, options = {}) {
           state: "success",
           attempt,
           rolesFound,
+          roles: extractRoles(engine, result.stdout || ""),
           durationMs: Date.now() - startedAt,
           message: `Scan finished with ${rolesFound} matching role${rolesFound === 1 ? "" : "s"}.`,
         };
@@ -414,9 +447,12 @@ export async function recordCompletion(storePath, claim, result, inMemoryStore =
       else delete current.lastError;
     }
 
+    // Only persist `roles` when the run actually captured identities, so runs
+    // with none keep their pre-feature count-only shape on disk.
+    const roleDetail = Array.isArray(result.roles) && result.roles.length ? { roles: result.roles } : {};
     const run = store.runs.find((item) => item.id === claim.runId && item.jobId === job.id);
-    if (run) Object.assign(run, { at, durationMs: result.durationMs, state: result.state, attempt: result.attempt, message: result.message, rolesFound: result.rolesFound, engine: job.engine || "full" });
-    else store.runs.unshift({ id: claim.runId || randomUUID(), jobId: job.id, at, durationMs: result.durationMs, state: result.state, attempt: result.attempt, message: result.message, rolesFound: result.rolesFound, engine: job.engine || "full" });
+    if (run) Object.assign(run, { at, durationMs: result.durationMs, state: result.state, attempt: result.attempt, message: result.message, rolesFound: result.rolesFound, ...roleDetail, engine: job.engine || "full" });
+    else store.runs.unshift({ id: claim.runId || randomUUID(), jobId: job.id, at, durationMs: result.durationMs, state: result.state, attempt: result.attempt, message: result.message, rolesFound: result.rolesFound, ...roleDetail, engine: job.engine || "full" });
     store.queue = store.queue.filter((item) => !(item.id === claim.queueId && item.claimToken === claim.claimToken));
     if (store.runs.length > MAX_RUNS) store.runs = store.runs.slice(0, MAX_RUNS);
   };
