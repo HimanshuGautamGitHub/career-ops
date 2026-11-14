@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import * as yaml from "js-yaml";
 import { careerOpsRoot } from "@/lib/career-ops";
-import { DEFAULT_FILTERS, cleanChips, expandFiltersForScan, type ExploreFilters } from "@/lib/explore";
+import { DEFAULT_FILTERS, WORK_SETUPS, cleanChips, expandFiltersForScan, type ExploreFilters, type WorkSetup } from "@/lib/explore";
 import { profileTargetKeywords } from "@/lib/profile-keywords.mjs";
 import { getProfilePath } from "@/lib/core/profile-path.mjs";
 import { workplacePolicyConfig } from "./workplace-policy.mjs";
@@ -101,17 +101,30 @@ export function seedExploreFilters(): { filters: ExploreFilters; seededFrom: str
     if (filters.positive.length || filters.allow.length || filters.block.length || filters.blockHard.length) seededFrom.push("portals.yml");
   }
 
+  const profile = loadYaml(getProfilePath(careerOpsRoot()));
+
   if (filters.positive.length === 0) {
     // Shape-reading lives in profile-keywords.mjs, mirroring the core's
     // providers/_profile-keywords.mjs. Inlined here it had drifted from the
     // core on BOTH fields — `primary` read as a string when it is a list,
     // `archetypes` spread raw when its entries are objects — so this fallback
     // returned nothing for every profile.yml the app itself writes.
-    const fromRoles = listFrom(profileTargetKeywords(loadYaml(getProfilePath(careerOpsRoot()))));
+    const fromRoles = listFrom(profileTargetKeywords(profile));
     if (fromRoles.length) {
       filters.positive = fromRoles;
-      seededFrom.push("profile.yml");
+      if (!seededFrom.includes("profile.yml")) seededFrom.push("profile.yml");
     }
+  }
+
+  // Work-setup preference (AGEN-253 writes `work_setup` as a top-level profile
+  // string). Round-trip it into the enum array the ExploreFilters contract uses
+  // (AGEN-249). A missing key or an out-of-enum value leaves workSetup unset,
+  // which is the pre-AGEN-254 "don't filter on this axis" behavior — so existing
+  // profiles and scheduled-job records decode unchanged.
+  const rawWorkSetup = typeof profile?.work_setup === "string" ? profile.work_setup.trim() : "";
+  if ((WORK_SETUPS as string[]).includes(rawWorkSetup)) {
+    filters.workSetup = [rawWorkSetup as WorkSetup];
+    if (!seededFrom.includes("profile.yml")) seededFrom.push("profile.yml");
   }
 
   return { filters, seededFrom };
