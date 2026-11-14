@@ -22,8 +22,10 @@ import {
   claimManualJob,
   enqueueDueJobs,
   executeJob,
+  extractRoles,
   extractRolesFound,
   MAX_ATTEMPTS,
+  MAX_ROLES,
   MAX_RUNS,
   nextFutureRun,
   recordCompletion,
@@ -448,6 +450,45 @@ test("roles-found parsing matches both scanner output formats", () => {
   assert.equal(extractRolesFound("full", JSON.stringify({ postingsKept: 7 })), 7);
   assert.equal(extractRolesFound("portals", "New offers added:      3\n"), 3);
   assert.equal(extractRolesFound("full", "not json"), 0);
+});
+
+test("extractRoles maps full-scan offers to role identities and keeps the count aligned", () => {
+  const stdout = JSON.stringify({
+    postingsKept: 2,
+    offers: [
+      { title: "VP, Talent Management", company: "Acme", url: "https://acme.example/jobs/1", location: "Remote" },
+      { title: "Director of Leadership Development", company: "Globex", url: "https://globex.example/jobs/2" },
+    ],
+  });
+  assert.deepEqual(extractRoles("full", stdout), [
+    { title: "VP, Talent Management", company: "Acme", url: "https://acme.example/jobs/1" },
+    { title: "Director of Leadership Development", company: "Globex", url: "https://globex.example/jobs/2" },
+  ]);
+  // The displayed count stays the postingsKept value, unchanged by this new field.
+  assert.equal(extractRolesFound("full", stdout), 2);
+});
+
+test("extractRoles omits absent company/url, drops titleless offers, and ignores portals + junk stdout", () => {
+  const stdout = JSON.stringify({
+    offers: [
+      { title: "Succession Planning Lead" },
+      { title: "   ", company: "NoTitle" },
+      { company: "StillNoTitle", url: "https://x.example" },
+      "garbage",
+    ],
+  });
+  assert.deepEqual(extractRoles("full", stdout), [{ title: "Succession Planning Lead" }]);
+  // Portals runs emit no JSON offers, and unparseable stdout yields no roles.
+  assert.deepEqual(extractRoles("portals", "New offers added: 3\n"), []);
+  assert.deepEqual(extractRoles("full", "not json"), []);
+  assert.deepEqual(extractRoles("full", JSON.stringify({ postingsKept: 5 })), []);
+});
+
+test("extractRoles caps the role array at MAX_ROLES", () => {
+  const offers = Array.from({ length: MAX_ROLES + 25 }, (_, i) => ({ title: `Role ${i}` }));
+  const roles = extractRoles("full", JSON.stringify({ offers }));
+  assert.equal(roles.length, MAX_ROLES);
+  assert.equal(roles[0].title, "Role 0");
 });
 
 test("queue claim is durable until completion and stale claims are reclaimable", async () => {

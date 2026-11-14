@@ -6,6 +6,7 @@ import type { JobRun } from "@/lib/scheduled-jobs";
 import { cn } from "@/lib/cn";
 import { Modal } from "@/components/ui/modal";
 import { runStatusTone } from "@/lib/scheduled-run-status.mjs";
+import { formatRunRoles } from "@/lib/scheduled-run-roles.mjs";
 
 export function RunHistoryDrawer({
   isOpen,
@@ -48,6 +49,7 @@ export function RunHistoryDrawer({
               const isQueued = run.state === "queued";
               const isCancelled = run.state === "cancelled";
               const tone = runStatusTone(run.state);
+              const roleList = formatRunRoles(run);
               return (
                 <div
                   key={`${run.id || "run"}-${i}`}
@@ -89,6 +91,27 @@ export function RunHistoryDrawer({
                       <span className="font-semibold text-foreground">{run.rolesFound} roles found</span>
                     )}
                   </div>
+
+                  {roleList.length > 0 && (
+                    <ul className="mt-2 space-y-1 border-t border-border/40 pt-1.5 text-[11px]">
+                      {roleList.map((role, ri) => (
+                        <li key={`${run.id || "run"}-role-${ri}`} className="truncate text-muted">
+                          {role.url ? (
+                            <a
+                              href={role.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-brand-text hover:underline"
+                            >
+                              {role.label}
+                            </a>
+                          ) : (
+                            <span>{role.label}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               );
             })

@@ -32,6 +32,12 @@ export type ScheduledJob = {
   rolesFoundCount?: number;
 };
 
+export type JobRunRole = {
+  title: string;
+  company?: string;
+  url?: string;
+};
+
 export type JobRun = {
   id: string;
   jobId: string;
@@ -41,6 +47,9 @@ export type JobRun = {
   attempt: number;
   message?: string;
   rolesFound?: number;
+  // Role identities captured from the scan (full engine). Absent on
+  // pre-feature records and portals runs, which render count-only.
+  roles?: JobRunRole[];
   engine?: ScanEngine;
 };
 
