@@ -3,7 +3,7 @@
 import { memo, startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useOptimistic, useRef, useState, useTransition, type MouseEvent, type PointerEvent } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Search, ChevronsUpDown, X, Compass, ArrowRight, ExternalLink, Download, FileText } from "lucide-react";
+import { Search, ChevronsUpDown, X, Compass, ArrowRight, ExternalLink, Download, FileText, FileClock } from "lucide-react";
 import type { Application, InboxJob } from "@/lib/career-ops";
 import { Badge } from "@/components/ui/badge";
 import { CompanyLogo } from "@/components/company-logo";
@@ -52,6 +52,7 @@ export function PipelineView({
   inboxFitError = null,
   trackerShape = "rows",
   cvRows = [],
+  appliedCvRows = [],
 }: {
   applications: Application[];
   inbox: InboxJob[] | null;
@@ -60,8 +61,12 @@ export function PipelineView({
   trackerShape?: "missing" | "empty" | "malformed" | "rows";
   /** Tracker row numbers that have a tailored CV PDF on disk. */
   cvRows?: string[];
+  /** Tracker row numbers with a frozen resume version — the exact CV sent at
+   *  apply time (AGEN-262, Gap 5). Distinct from cvRows, which is the live CV. */
+  appliedCvRows?: string[];
 }) {
   const hasCv = useMemo(() => new Set(cvRows), [cvRows]);
+  const hasAppliedCv = useMemo(() => new Set(appliedCvRows), [appliedCvRows]);
   // AGEN-252: each row shows when it was last evaluated and a liveness badge.
   // `today` is resolved after mount so recency never triggers an SSR/client
   // hydration mismatch at a day boundary; the liveness probe is a dry run that
@@ -993,6 +998,7 @@ export function PipelineView({
                     selected={selected.has(key)}
                     isCursor={cursor === index}
                     hasCv={hasCv.has(r.n)}
+                    hasAppliedCv={hasAppliedCv.has(r.n)}
                     today={today}
                     liveness={liveness}
                     detailQuery={detailQuery}
@@ -1077,6 +1083,7 @@ const TrackerRow = memo(function TrackerRow({
   selected,
   isCursor,
   hasCv,
+  hasAppliedCv,
   today,
   liveness,
   detailQuery,
@@ -1092,6 +1099,7 @@ const TrackerRow = memo(function TrackerRow({
   selected: boolean;
   isCursor: boolean;
   hasCv: boolean;
+  hasAppliedCv: boolean;
   today: string | null;
   liveness: LivenessProbe | null;
   detailQuery: string;
@@ -1197,16 +1205,36 @@ const TrackerRow = memo(function TrackerRow({
         </div>
       </td>
       <td className="whitespace-nowrap px-4 py-3">
-        {hasCv ? (
-          <a
-            href={`/api/cv-pdf?application=${encodeURIComponent(r.n)}`}
-            target="_blank"
-            rel="noreferrer"
-            title="Open the tailored CV PDF"
-            className="inline-flex items-center gap-1.5 text-brand-text hover:underline"
-          >
-            <FileText aria-hidden="true" className="size-3.5" /> PDF
-          </a>
+        {hasCv || hasAppliedCv ? (
+          <span className="inline-flex items-center gap-2">
+            {hasCv && (
+              <a
+                href={`/api/cv-pdf?application=${encodeURIComponent(r.n)}`}
+                target="_blank"
+                rel="noreferrer"
+                title="Open the tailored CV PDF"
+                className="inline-flex items-center gap-1.5 text-brand-text hover:underline"
+              >
+                <FileText aria-hidden="true" className="size-3.5" /> PDF
+              </a>
+            )}
+            {/* The exact resume version sent at apply time (AGEN-262, Gap 5). A
+                DISTINCT link, never an overload of the live-PDF link above: the
+                live CV can change on regenerate, this is frozen as sent. */}
+            {hasAppliedCv && (
+              <a
+                href={`/api/applied-cv?application=${encodeURIComponent(r.n)}`}
+                target="_blank"
+                rel="noreferrer"
+                title="Open the resume version actually sent with this application"
+                aria-label="Open the resume version actually sent with this application"
+                className="inline-flex items-center gap-1 text-muted hover:text-brand-text hover:underline"
+              >
+                {hasCv && <span aria-hidden="true" className="text-faint">·</span>}
+                <FileClock aria-hidden="true" className="size-3.5" /> used
+              </a>
+            )}
+          </span>
         ) : (
           <span className="text-faint">—</span>
         )}

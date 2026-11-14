@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
-import { readReport, findApplication, trackerCanDelete } from "@/lib/career-ops";
+import { readReport, findApplication, trackerCanDelete, careerOpsRoot } from "@/lib/career-ops";
 import { resolveTailoredCover } from "@/lib/apply/cover";
+import { resolveAppliedCv } from "@/lib/apply/applied-cv-store.mjs";
 import { ReportView } from "@/components/report-view";
 import { pipelineQuery } from "@/lib/pipeline-navigation.mjs";
 import { reportNumberFor } from "@/lib/apply-checklist.mjs";
@@ -30,6 +31,11 @@ export default async function ReportPage({ params, searchParams }: {
   const reportNum = reportNumberFor(id, app, report?.file ?? null);
   const disk = await readCvDiskState(id, companyName, (app?.pdf ?? "").includes("✅"), reportNum);
   const pdfFileReady = disk.exists;
+  // The frozen resume version for THIS application (AGEN-262, Gap 5). Resolved
+  // here so the "Resume used" pill only renders when a saved version exists.
+  const appliedCvReady =
+    reportNum != null &&
+    resolveAppliedCv({ root: careerOpsRoot(), report: String(reportNum) }) !== null;
   return (
     <ReportView
       id={id}
@@ -40,6 +46,7 @@ export default async function ReportPage({ params, searchParams }: {
       pdfFileReady={pdfFileReady}
       trackerMarkedPdf={(app?.pdf ?? "").includes("✅")}
       coverReady={coverReady}
+      appliedCvReady={appliedCvReady}
       backHref={`/pipeline${query ? `?${query}` : ""}`}
       applyHref={`/pipeline/${encodeURIComponent(id)}/apply${query ? `?${query}` : ""}`}
       reportNum={reportNum}
