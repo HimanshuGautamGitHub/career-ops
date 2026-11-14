@@ -4,6 +4,7 @@ import { runSetStatus } from "@/lib/core-cli";
 import { canonicalizeStatus } from "@/lib/core/states";
 import { parseCliJson, trackerRowArg, clientErrorMessage } from "@/lib/status-cli.mjs";
 import { readJsonObject } from "@/lib/json-body";
+import { freezeAppliedCvForApplication } from "@/lib/apply/freeze-applied-cv";
 
 export const runtime = "nodejs"; // delegates to the core CLI via child_process
 
@@ -161,6 +162,20 @@ async function writeStatus(n: unknown, canon: string | null) {
 
   if (!parsed) {
     return Response.json({ error: "status update returned no result" }, { status: 500 });
+  }
+
+  // AGEN-262, Gap 5: on the actual transition into Applied, freeze the tailored
+  // CV being sent into the content-addressed user-layer store so the version
+  // applied with survives a later regenerate (which overwrites the live
+  // output/ PDF). Best-effort: a missing report number or no tailored CV on
+  // disk is "nothing to freeze", and any failure here must never turn a
+  // committed status write into an error response.
+  if (canon === "Applied" && parsed.changed === true) {
+    try {
+      await freezeAppliedCvForApplication(row);
+    } catch (err) {
+      console.error(`/api/status: applied-CV freeze failed for row ${row}:`, err);
+    }
   }
 
   // Response shape is unchanged for existing callers; `changed` and
