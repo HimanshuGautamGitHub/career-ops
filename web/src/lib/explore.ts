@@ -64,7 +64,7 @@ export type WorkSetup = "remote" | "hybrid" | "onsite";
 export const WORK_SETUPS: WorkSetup[] = ["remote", "hybrid", "onsite"];
 
 export const WORK_SETUP_LABEL: Record<WorkSetup, string> = {
-  remote: "Remote",
+  remote: "Remote (anywhere)",
   hybrid: "Hybrid",
   onsite: "In-office",
 };

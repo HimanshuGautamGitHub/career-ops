@@ -261,6 +261,9 @@ export function FilterBuilder({
                 );
               })}
             </div>
+            <p className="mt-1.5 text-xs text-muted">
+              Remote (anywhere) also surfaces worldwide / remote-anywhere postings, not only the ones tagged “Remote”.
+            </p>
           </div>
         </div>
       )}
