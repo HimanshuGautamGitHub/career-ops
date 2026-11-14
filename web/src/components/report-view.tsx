@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, FileText, ExternalLink, ChevronDown } from "lucide-react";
+import { ArrowLeft, FileText, FileClock, ExternalLink, ChevronDown } from "lucide-react";
 import type { Application } from "@/lib/career-ops";
 import { Badge } from "@/components/ui/badge";
 import { legitimacyTone, parseReport } from "@/lib/format";
@@ -53,6 +53,7 @@ export function ReportView({
   pdfFileReady = false,
   trackerMarkedPdf = false,
   coverReady = false,
+  appliedCvReady = false,
   backHref = "/pipeline",
   applyHref,
   reportNum = null,
@@ -72,6 +73,9 @@ export function ReportView({
    *  the page, see resolveTailoredCover). The page drafts letters through the
    *  cover run but does not render them, so this link only finds CLI PDFs. */
   coverReady?: boolean;
+  /** A frozen resume version exists for THIS application (AGEN-262, Gap 5),
+   *  resolved by the page via the applied-CV store. Distinct from a live CV. */
+  appliedCvReady?: boolean;
   backHref?: string;
   applyHref?: string;
   reportNum?: number | null;
@@ -192,6 +196,17 @@ export function ReportView({
                     className="inline-flex items-center justify-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-800 transition-colors hover:bg-emerald-500/15 dark:text-emerald-400 max-sm:min-h-[44px]"
                   >
                     <FileText className="size-3.5" /> View cover
+                  </a>
+                )}
+                {appliedCvReady && (
+                  <a
+                    href={`/api/applied-cv?application=${encodeURIComponent(id)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open the resume version used for this application"
+                    className="inline-flex items-center justify-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs font-medium transition-colors hover:border-brand/40 hover:text-brand-text max-sm:min-h-[44px]"
+                  >
+                    <FileClock className="size-3.5" /> Resume used
                   </a>
                 )}
                 {disk.note && <p className="basis-full text-sm text-muted">{disk.note}</p>}

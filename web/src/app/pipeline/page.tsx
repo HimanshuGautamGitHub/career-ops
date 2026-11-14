@@ -1,6 +1,7 @@
 import { Suspense } from "react";
-import { pdfReadyReportNumbers, pipelineSummary, readTrackerShape, withCloseDates, type InboxJob } from "@/lib/career-ops";
+import { careerOpsRoot, pdfReadyReportNumbers, pipelineSummary, readTrackerShape, withCloseDates, type InboxJob } from "@/lib/career-ops";
 import { reportNumberFromCell } from "@/lib/apply/cv-selection.mjs";
+import { appliedCvReportSet } from "@/lib/apply/applied-cv-store.mjs";
 import { pendingInbox } from "@/lib/inbox-pending.mjs";
 import { PipelineView } from "@/components/pipeline-view";
 import { pipelineTab } from "@/lib/pipeline-navigation.mjs";
@@ -28,6 +29,11 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
   // One manifest read for the whole table, not one per row (#6974: per-row
   // lookups took 8 s on a 5,000-row tracker).
   const cvRows: string[] = [];
+  // Rows whose FROZEN resume version (the exact CV sent at apply time, AGEN-262
+  // Gap 5) is on disk. Keyed on the same report number as cvRows, but resolved
+  // through the applied-CV store rather than the live pdf-index, so the "· used"
+  // link only appears when a real retained artifact exists — never dead.
+  const appliedCvRows: string[] = [];
   if (!onInbox) {
     const rowReports = applications.flatMap((a) => {
       const report = reportNumberFromCell(a.report);
@@ -35,6 +41,8 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
     });
     const ready = await pdfReadyReportNumbers(new Set(rowReports.map((r) => r.report)));
     for (const r of rowReports) if (ready.has(r.report)) cvRows.push(r.n);
+    const applied = appliedCvReportSet(careerOpsRoot());
+    for (const r of rowReports) if (applied.has(String(r.report))) appliedCvRows.push(r.n);
   }
   return (
     <Suspense>
@@ -45,6 +53,7 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
         inboxFitError={fitted?.error ?? null}
         trackerShape={trackerShape}
         cvRows={cvRows}
+        appliedCvRows={appliedCvRows}
       />
     </Suspense>
   );
