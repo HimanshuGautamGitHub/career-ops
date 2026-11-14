@@ -72,6 +72,10 @@ type ExploreCtx = {
   added: Set<string>;
   adding: Set<string>;
   discover: () => Promise<void>;
+  /** FilterBuilder registers a flush here (null on unmount). discover() runs it
+   *  first so a KeywordField draft typed but not committed still reaches the scan
+   *  (AGEN-261, Gap 4). */
+  registerDraftFlush: (fn: (() => void) | null) => void;
   /** Load the SUPPLY-loop offers Today's "Fresh matches this week" already
    *  fetched from /api/whats-new, straight into the results phase — no scan. */
   loadFresh: () => Promise<void>;
@@ -160,6 +164,12 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   aiIntentRef.current = aiIntent;
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
+  // FilterBuilder registers a draft-flush here; discover() runs it before reading
+  // filtersRef so a pending KeywordField draft is merged first (AGEN-261, Gap 4).
+  const draftFlushRef = useRef<(() => void) | null>(null);
+  const registerDraftFlush = useCallback((fn: (() => void) | null) => {
+    draftFlushRef.current = fn;
+  }, []);
 
   const setFilters = useCallback((f: ExploreFilters) => {
     touched.current = true;
@@ -174,6 +184,10 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
 
   const discover = useCallback(async () => {
     if (runningRef.current) return;
+    // Merge any pending (typed-but-not-committed) KeywordField draft into the
+    // filters first — setFilters updates filtersRef synchronously, so the flushed
+    // values are visible on the next line (AGEN-261, Gap 4).
+    draftFlushRef.current?.();
     const f = filtersRef.current;
     if (f.preset === CHINA_PRESET && !f.employers?.length) return;
     const employer = f.preset === CHINA_PRESET;
@@ -666,10 +680,10 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       filters, setFilters, initFilters, phase,
       running: phase === "casting" || phase === "scanning" || phase === "revealing" || phase === "hunting",
       offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, employerOutcome, partial, error, scannerMissing, added, adding,
-      discover, loadFresh, addToPipeline, applyPatch, reset,
+      discover, registerDraftFlush, loadFresh, addToPipeline, applyPatch, reset,
       mode, setMode, aiIntent, setAiIntent, discoverAI, aiTrace, aiCost,
     }),
-    [filters, setFilters, initFilters, phase, offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, employerOutcome, partial, error, scannerMissing, added, adding, discover, loadFresh, addToPipeline, applyPatch, reset, mode, setMode, aiIntent, discoverAI, aiTrace, aiCost],
+    [filters, setFilters, initFilters, phase, offers, sources, matchCount, companiesScanned, companiesAvailable, capHit, droppedNoDate, status, employerOutcome, partial, error, scannerMissing, added, adding, discover, registerDraftFlush, loadFresh, addToPipeline, applyPatch, reset, mode, setMode, aiIntent, discoverAI, aiTrace, aiCost],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
