@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { editLocks, editingAfterReload, latestOnly, loadFailureView, pendingAfterReload, settleChoice } from "../../src/lib/templates-state.mjs";
+import { editLocks, editingAfterReload, latestOnly, loadFailureView, pendingAfterReload, previewAfterReload, settleChoice } from "../../src/lib/templates-state.mjs";
 
 // The Templates section reloads its list after every change. These two pieces
 // decide what a reload may do to the screen, so they are tested without React.
@@ -55,6 +55,18 @@ test("the editor is closed when the reload no longer lists its template", () => 
 
 test("no open editor stays no open editor", () => {
   assert.equal(editingAfterReload(null, [{ name: "mine" }]), null);
+});
+
+test("the open preview stays while its template is still in the reloaded list", () => {
+  assert.equal(previewAfterReload("mine", [{ name: "mine" }, { name: "other" }]), "mine");
+});
+
+test("the preview is closed when the reload no longer lists its template", () => {
+  assert.equal(previewAfterReload("gone", [{ name: "other" }]), null);
+});
+
+test("no open preview stays no open preview", () => {
+  assert.equal(previewAfterReload(null, [{ name: "mine" }]), null);
 });
 
 // Choosing a default: the order of apply -> reload, and when neither happens.

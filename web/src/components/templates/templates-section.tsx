@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { TemplateEditor } from "@/components/templates/template-editor";
-import { editLocks, editingAfterReload, latestOnly, loadFailureView, pendingAfterReload, settleChoice } from "@/lib/templates-state.mjs";
+import { TemplatePreviewModal } from "@/components/templates/template-preview-modal";
+import { editLocks, editingAfterReload, latestOnly, loadFailureView, pendingAfterReload, previewAfterReload, settleChoice } from "@/lib/templates-state.mjs";
 
 // The CV templates the core resolves, each shown filled with a fictional resume
 // so the design is visible before it is chosen. Choosing one writes cv.template
@@ -36,6 +37,8 @@ export function TemplatesSection({ kind = "cv" }: { kind?: "cv" | "cover" }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
+  // The template whose full preview is open in the modal, by name, or null.
+  const [previewing, setPreviewing] = useState<string | null>(null);
   // Bumped after a save so the card previews fetch the edited template.
   const [rev, setRev] = useState(0);
 
@@ -63,6 +66,7 @@ export function TemplatesSection({ kind = "cv" }: { kind?: "cv" | "cover" }) {
         hasListRef.current = true;
         setPending((p) => pendingAfterReload(p, list));
         setEditing((e) => editingAfterReload(e, list));
+        setPreviewing((p) => previewAfterReload(p, list));
       })
       .catch(() => {
         if (current()) setLoadError(loadFailureView(listIsCurrent, hasListRef.current));
@@ -155,7 +159,14 @@ export function TemplatesSection({ kind = "cv" }: { kind?: "cv" | "cover" }) {
         <ul className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
           {templates.map((t) => (
             <li key={t.name} className="rounded-xl border border-border bg-surface/40 p-3">
-              <Thumb key={`${t.name}-${rev}`} kind={kind} name={t.name} title={`${t.displayName} preview`} />
+              <button
+                type="button"
+                aria-label={`Preview ${t.displayName}`}
+                onClick={() => setPreviewing(t.name)}
+                className="block rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-text"
+              >
+                <Thumb key={`${t.name}-${rev}`} kind={kind} name={t.name} title={`${t.displayName} preview`} />
+              </button>
               <div className="mt-2 flex items-center justify-between gap-2">
                 <span className="truncate text-sm font-medium">{t.displayName}</span>
                 {t.isDefault ? (
@@ -269,6 +280,22 @@ export function TemplatesSection({ kind = "cv" }: { kind?: "cv" | "cover" }) {
           onSaved={() => setRev((n) => n + 1)}
         />
       )}
+      {(() => {
+        const t = previewing ? templates?.find((x) => x.name === previewing) : undefined;
+        if (!t) return null;
+        return (
+          <TemplatePreviewModal
+            key={`${t.name}-${rev}`}
+            kind={kind}
+            name={t.name}
+            displayName={t.displayName}
+            isDefault={t.isDefault}
+            busy={busy}
+            onChoose={choose}
+            onClose={() => setPreviewing(null)}
+          />
+        );
+      })()}
     </section>
   );
 }

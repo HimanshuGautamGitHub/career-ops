@@ -81,3 +81,21 @@ test("opening the editor remembers the control that opened it, and closing retur
   assert.ok(closeAt >= 0, "found the editor's onClose");
   assert.match(src.slice(closeAt, src.indexOf("/>", closeAt)), /returnFocus\.current\?\.focus\(\)/);
 });
+
+test("the thumbnail is a labelled button that opens the full preview on click", () => {
+  const open = buttonOf("setPreviewing(t.name)");
+  assert.match(open, /aria-label=\{`Preview \$\{t\.displayName\}`\}/);
+  assert.match(open, /<Thumb\b/);
+});
+
+test("the full preview renders TemplatePreviewModal, wired to the chosen template", () => {
+  assert.match(src, /import\s*{[^}]*\bTemplatePreviewModal\b[^}]*}\s*from\s*"@\/components\/templates\/template-preview-modal"/);
+  assert.match(src, /<TemplatePreviewModal\b[\s\S]*?onClose=\{\(\) => setPreviewing\(null\)\}/);
+  // The modal reuses the card's own default-choosing action, not a second path.
+  assert.match(src, /<TemplatePreviewModal\b[\s\S]*?onChoose=\{choose\}/);
+});
+
+test("a reload drops the open preview when its template is gone, via previewAfterReload", () => {
+  assert.match(src, /import\s*{[^}]*\bpreviewAfterReload\b[^}]*}\s*from\s*"@\/lib\/templates-state\.mjs"/);
+  assert.match(src, /setPreviewing\(\(p\) => previewAfterReload\(p, list\)\)/);
+});
