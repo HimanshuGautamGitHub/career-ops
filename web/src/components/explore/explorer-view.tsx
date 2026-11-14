@@ -42,7 +42,7 @@ export function ExplorerView({
   evaluated: { n: string; company: string; role: string }[];
   rootExists: boolean;
 }) {
-  const { filters, setFilters, initFilters, phase, running, offers, discover, loadFresh, status, employerOutcome, error, scannerMissing, mode, setMode, aiIntent, setAiIntent, discoverAI, companiesScanned, companiesAvailable, capHit, droppedNoDate, partial } = useExplore();
+  const { filters, setFilters, initFilters, phase, running, offers, discover, registerDraftFlush, loadFresh, status, employerOutcome, error, scannerMissing, mode, setMode, aiIntent, setAiIntent, discoverAI, companiesScanned, companiesAvailable, capHit, droppedNoDate, partial } = useExplore();
   const scanNote =
     companiesScanned > 0
       ? `Scanned ${companiesScanned.toLocaleString()}${companiesAvailable > companiesScanned ? ` of ${companiesAvailable.toLocaleString()}` : ""} compan${companiesScanned === 1 ? "y" : "ies"}${partial ? " · some sources were unreachable" : ""}.`
@@ -183,14 +183,14 @@ export function ExplorerView({
               </button>
               {refineOpen && (
                 <div className="space-y-4 border-t border-border p-4">
-                  <FilterBuilder filters={filters} onChange={setFilters} seededFrom={seed.seededFrom} disabled={running} />
+                  <FilterBuilder filters={filters} onChange={setFilters} seededFrom={seed.seededFrom} disabled={running} registerFlush={registerDraftFlush} />
                   <DiscoverBar canDiscover={canDiscover} onDiscover={discover} label="Re-cast (free)" filters={filters} />
                 </div>
               )}
             </div>
           ) : (
             <div className="mb-6 rounded-2xl border border-border bg-surface/30 p-5">
-              <FilterBuilder filters={filters} onChange={setFilters} seededFrom={seed.seededFrom} disabled={running} />
+              <FilterBuilder filters={filters} onChange={setFilters} seededFrom={seed.seededFrom} disabled={running} registerFlush={registerDraftFlush} />
               <div className="mt-5">
                 <DiscoverBar canDiscover={canDiscover} onDiscover={discover} label="Discover (free)" filters={filters} />
               </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { X, Ban, Clock, MapPin, ChevronDown, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
@@ -17,6 +17,7 @@ import {
   type WorkSetup,
 } from "@/lib/explore";
 
+import { flushDraftsIntoFilters } from "@/lib/draft-flush.mjs";
 import { CHINA_PRESET, CHINA_SOURCES, EMPLOYER_LABEL } from "@/lib/employer-preset.mjs";
 import type { EmployerSource } from "@/lib/explore";
 import { CITY_SUGGESTIONS } from "@/data/cities.mjs";
@@ -48,6 +49,8 @@ function KeywordField({
   ariaLabel,
   onChange,
   suggestions,
+  draft,
+  onDraftChange,
 }: {
   values: string[];
   tone: "inc" | "exc";
@@ -59,9 +62,14 @@ function KeywordField({
    *  a value absent from the list is still typeable. Read-only: the curated
    *  CITY_SUGGESTIONS list is a frozen `readonly string[]`. */
   suggestions?: readonly string[];
+  /** The uncommitted typed text, lifted to FilterBuilder so discover() can flush
+   *  a pending draft into the filter arrays before the scan reads them (AGEN-261,
+   *  Gap 4). Previously local state here, so a title typed but not committed
+   *  (no blur / Enter / separator) never reached filters.positive. */
+  draft: string;
+  onDraftChange: (text: string) => void;
 }) {
   const listId = useId();
-  const [draft, setDraft] = useState("");
   // Split only on UNAMBIGUOUS item separators (comma / newline / semicolon) — never
   // bare spaces, which are legitimate inside multi-word entries ("AI platform",
   // "New York", "Costa Rica"). A space-only paste stays one chip on purpose (#1147).
@@ -69,7 +77,7 @@ function KeywordField({
     const parts = text.split(/[,\n;\t\r]+/);
     const next = cleanChips([...values, ...parts]);
     onChange(next);
-    setDraft("");
+    onDraftChange("");
   };
   return (
     <div className={cn("co-fb__field border border-border bg-surface/40 focus-within:border-brand/40 transition-colors")}>
@@ -92,7 +100,7 @@ function KeywordField({
           // trailing separator, so commit it straight to a chip.
           if (suggestions?.includes(val)) commit(val);
           else if (/[,\n;\t\r]$/.test(val)) commit(val);
-          else setDraft(val);
+          else onDraftChange(val);
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter" && draft.trim()) {
@@ -110,7 +118,7 @@ function KeywordField({
           // A plain-text paste (e.g. pasting "-EMEA" after typing "Remote")
           // stays in the input field so the user can keep editing.
           if (/[,;\n\t\r]/.test(text)) commit(merged);
-          else setDraft(merged);
+          else onDraftChange(merged);
         }}
         onBlur={() => draft.trim() && commit(draft)}
         placeholder={values.length ? "" : placeholder}
@@ -140,15 +148,40 @@ export function FilterBuilder({
   onChange,
   seededFrom = [],
   disabled = false,
+  registerFlush,
 }: {
   filters: ExploreFilters;
   onChange: (f: ExploreFilters) => void;
   seededFrom?: string[];
   disabled?: boolean;
+  /** Optional. When provided (the Explore view wires it to the provider), the
+   *  builder registers a flush that merges any pending KeywordField draft into
+   *  the filter arrays. The provider runs it at the start of discover() so a
+   *  "Roles to find" title typed but not committed still reaches the scan
+   *  (AGEN-261, Gap 4). Callers that don't scan (the scheduled-scans modals)
+   *  omit it and keep the commit-on-blur behavior unchanged. */
+  registerFlush?: (fn: (() => void) | null) => void;
 }) {
   const employer = filters.preset === CHINA_PRESET;
   const [advanced, setAdvanced] = useState(false);
   const set = (patch: Partial<ExploreFilters>) => onChange({ ...filters, ...patch });
+  // Uncommitted KeywordField text, lifted here so discover() can flush it before
+  // the scan reads filters. Keyed by ExploreFilters array field (DRAFT_FIELDS).
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draftProps = (field: string) => ({
+    draft: drafts[field] ?? "",
+    onDraftChange: (text: string) => setDrafts((d) => ({ ...d, [field]: text })),
+  });
+  const flushDrafts = useCallback(() => {
+    const next = flushDraftsIntoFilters(filters, drafts);
+    if (next !== filters) onChange(next);
+    setDrafts({});
+  }, [filters, drafts, onChange]);
+  useEffect(() => {
+    if (!registerFlush) return;
+    registerFlush(flushDrafts);
+    return () => registerFlush(null);
+  }, [registerFlush, flushDrafts]);
   const toggleAts = (a: AtsSource) => {
     const has = filters.ats.includes(a);
     const next = has ? filters.ats.filter((x) => x !== a) : [...filters.ats, a];
@@ -188,7 +221,7 @@ export function FilterBuilder({
 
       <div>
         <Label hint={filters.positive.length === 0 ? (employer ? "empty = all titles" : "empty = every fresh posting") : undefined}>Roles to find</Label>
-        <KeywordField ariaLabel="Roles to find" values={filters.positive} tone="inc" placeholder="AI platform, ML infrastructure, staff engineer…" onChange={(v) => set({ positive: v })} />
+        <KeywordField {...draftProps("positive")} ariaLabel="Roles to find" values={filters.positive} tone="inc" placeholder="AI platform, ML infrastructure, staff engineer…" onChange={(v) => set({ positive: v })} />
         {!employer && seededFrom.length > 0 && filters.positive.length > 0 && (
           <p className="mt-1 text-[11px] text-faint">Seeded from your {seededFrom.join(" + ")} — edit freely.</p>
         )}
@@ -196,7 +229,7 @@ export function FilterBuilder({
 
       {!employer && <div>
         <Label>Exclude</Label>
-        <KeywordField ariaLabel="Exclude" values={filters.negative} tone="exc" placeholder="manager, sales, contract…" onChange={(v) => set({ negative: v })} />
+        <KeywordField {...draftProps("negative")} ariaLabel="Exclude" values={filters.negative} tone="exc" placeholder="manager, sales, contract…" onChange={(v) => set({ negative: v })} />
       </div>}
 
       <div>
@@ -206,6 +239,7 @@ export function FilterBuilder({
           </span>
         </Label>
         <KeywordField
+          {...draftProps("allow")}
           values={filters.allow}
           tone="inc"
           placeholder="Hyderabad, India · New York · Remote…"
@@ -330,16 +364,16 @@ export function FilterBuilder({
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label hint="rescues a multi-location posting">Always include</Label>
-              <KeywordField ariaLabel="Always include" values={filters.alwaysAllow} tone="inc" placeholder="Toronto…" onChange={(v) => set({ alwaysAllow: v })} />
+              <KeywordField {...draftProps("alwaysAllow")} ariaLabel="Always include" values={filters.alwaysAllow} tone="inc" placeholder="Toronto…" onChange={(v) => set({ alwaysAllow: v })} />
             </div>
             <div>
               <Label hint="unless Always include also matches">Exclude locations</Label>
-              <KeywordField ariaLabel="Exclude locations" values={filters.block} tone="exc" placeholder="India…" onChange={(v) => set({ block: v })} />
+              <KeywordField {...draftProps("block")} ariaLabel="Exclude locations" values={filters.block} tone="exc" placeholder="India…" onChange={(v) => set({ block: v })} />
             </div>
           </div>
           <div>
             <Label hint="hard reject — overrides Always include">Never include</Label>
-            <KeywordField ariaLabel="Never include" values={filters.blockHard} tone="exc" placeholder="USA, Brazil…" onChange={(v) => set({ blockHard: v })} />
+            <KeywordField {...draftProps("blockHard")} ariaLabel="Never include" values={filters.blockHard} tone="exc" placeholder="USA, Brazil…" onChange={(v) => set({ blockHard: v })} />
           </div>
           <div>
             <Label hint={`${filters.limitPerAts} companies / source`}>Scan depth</Label>
