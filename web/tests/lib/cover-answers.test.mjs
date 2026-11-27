@@ -85,5 +85,9 @@ test("wiring: the job keeps the brief, the run page shows it and the form refill
 
   const form = readFileSync(path.join(webRoot, "src/components/cover-draft-button.tsx"), "utf8");
   assert.match(form, /savedBrief \?\? storedCoverBrief\(job\?\.brief\)/);
-  assert.match(form, /defaultValue=\{prefill\?\.\[q\.name\]/);
+  // This fork drives the fields from controlled `brief` state so "Suggest with AI"
+  // can fill them; the #7441 recovery seeds that state from `prefill` at mount
+  // (a lazy useState initializer) rather than an uncontrolled defaultValue.
+  assert.match(form, /value=\{brief\[q\.name\]\}/);
+  assert.match(form, /useState<CoverBrief>\(\(\) =>[\s\S]*?prefill/);
 });

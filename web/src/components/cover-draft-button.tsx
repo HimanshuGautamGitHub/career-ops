@@ -40,6 +40,7 @@ export function CoverDraftButton({ n, company }: { n: string; company: string })
   const listQuery = pipelineQuery(useSearchParams().toString());
   const jobQuery = listQuery ? `?${listQuery}` : "";
   const [open, setOpen] = useState(false);
+  const [savedBrief, setSavedBrief] = useState<CoverBrief | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestMsg, setSuggestMsg] = useState<SuggestMessage | null>(null);
   const job = useMemo(
@@ -48,8 +49,9 @@ export function CoverDraftButton({ n, company }: { n: string; company: string })
   );
   const state = coverDraftButtonState(job);
   // The brief is lost when the user leaves the page, typically to read a failed
-  // run's log, so seed the controlled fields from the answers that run kept (#7441).
-  const prefill = storedCoverBrief(job?.brief);
+  // run's log, so seed the controlled fields from what this session last submitted
+  // and fall back to the answers that run kept (#7441).
+  const prefill = savedBrief ?? storedCoverBrief(job?.brief);
   const [brief, setBrief] = useState<CoverBrief>(() =>
     prefill
       ? {
@@ -63,6 +65,7 @@ export function CoverDraftButton({ n, company }: { n: string; company: string })
 
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setSavedBrief(brief);
     startJob({ title: `Cover letter · ${company}`, subtitle: "draft for this role", kind: "cover", input: n, page: `/pipeline/${n}`, brief });
     setOpen(false);
   };
