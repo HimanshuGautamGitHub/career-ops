@@ -114,6 +114,8 @@ export default {
   (string[], places without appended "Remote" or work models; omit when empty).
   When the source has a dedicated country code field (Lever), set `country`
   (trimmed, as given; omit when absent or null).
+  We Work Remotely has no code field: it reads the ISO code from the flag in
+  `<country>` and sets none when the flags name more than one country.
   When the payload has a dedicated field for them, also set `requisitionId`
   (the employer's requisition id — never the posting id, which changes on
   every re-release; `coerceId` from `_ids.mjs`) and `language` (the posting
@@ -125,6 +127,11 @@ export default {
   each with `language` set, the posting's own default language first — the
   URL dedup relies on that order, and never reads a candidate's language from
   its URL (`_types.js`, `language`; reference `providers/personio.mjs`).
+  When the payload has a dedicated employment-type field, spread
+  `...employmentTypeField(raw)` from `_employment-type.mjs` into the Job: it
+  sets `employmentType` to `full_time`, `part_time`, `contract`, `temporary`
+  or `internship`, and leaves the key off for anything else (reference
+  `providers/ashby.mjs`). Never derive it from the title or description.
   When the payload carries a stable per-posting id, also return
   `listingIdentity: { ats_provider, board_slug, posting_id }`: the provider
   id, the board namespace the provider already resolved (company slug,

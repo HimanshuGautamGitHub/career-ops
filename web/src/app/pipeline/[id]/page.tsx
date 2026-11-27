@@ -44,6 +44,7 @@ export default async function ReportPage({ params, searchParams }: {
       file={report?.file ?? null}
       canDelete={trackerCanDelete()}
       pdfFileReady={pdfFileReady}
+      applyPdfReady={disk.applyPdfReady}
       trackerMarkedPdf={(app?.pdf ?? "").includes("✅")}
       coverReady={coverReady}
       appliedCvReady={appliedCvReady}

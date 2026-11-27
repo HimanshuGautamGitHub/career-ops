@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { CadenceSettings } from "@/components/followups/cadence-settings";
+import { PageFormatSettings } from "@/components/page-format-settings";
 import { TemplatesSection } from "@/components/templates/templates-section";
 import { PreferencesSection } from "@/components/config/preferences-section";
 import { BlacklistSection } from "@/components/config/blacklist-section";
@@ -305,6 +306,8 @@ export function ConfigForm() {
       </button>
 
       <CadenceSettings />
+
+      <PageFormatSettings />
 
       <TemplatesSection kind="cv" />
 

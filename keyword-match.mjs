@@ -29,9 +29,12 @@
 import { readFileSync, existsSync, statSync  } from 'fs';
 import { join, isAbsolute, basename } from 'path';
 import { isMainModule } from './lib/is-main-module.mjs';
-import { getCareerOpsRoot } from './path-resolver.mjs';
+import { getCareerOpsRoot, resolveUserPath } from './path-resolver.mjs';
+
+export { resolveUserPath };
 import { extractSkills } from './skill-extract.mjs';
 import { collapseMarkdownLinks } from './verify-cv-facts.mjs';
+import { headingText, normalizePandocLine, toPlainText } from './lib/cv-markdown.mjs';
 
 // A normal path stays readable. A space or other shell syntax is quoted so the
 // example stays one argument.
@@ -145,14 +148,159 @@ export function keywordCount(keyword, text) {
   return total;
 }
 
+// A skill qualifier can itself be a list. Split only between skills so a
+// label such as "Measurement (oscilloscope, spectrum analyzer)" stays intact.
+function splitCvSkillTerms(text) {
+  const items = [];
+  let start = 0;
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')') depth = Math.max(0, depth - 1);
+    else if (!depth && /[,;|]/.test(text[i])) {
+      items.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  items.push(text.slice(start));
+  return items;
+}
+
+// Read structure rather than delete selected HTML with filtering regexes. A
+// raw-text body ends at an appropriate end tag even when that tag has stray
+// attributes or a slash. Quotes in ordinary attributes can contain > and <.
+// This is a text extractor for local CVs, not an HTML sanitizer.
+function cvHtmlSections(html) {
+  const source = String(html || '');
+  const output = [];
+  let heading = null;
+  const emit = text => (heading ? heading.parts : output).push(text);
+  const endHeading = () => {
+    if (!heading) return;
+    output.push(`\n${'#'.repeat(heading.level)} ${heading.parts.join('').replace(/\s+/g, ' ').trim()}\n`);
+    heading = null;
+  };
+  let rawTag = null;
+  let at = 0;
+  while (at < source.length) {
+    const open = source.indexOf('<', at);
+    if (open === -1) {
+      if (!rawTag) emit(source.slice(at).replace(/\s+/g, ' '));
+      break;
+    }
+    if (!rawTag) emit(source.slice(at, open).replace(/\s+/g, ' '));
+    if (!rawTag && source.startsWith('<!--', open)) {
+      const end = /--!?>/g;
+      end.lastIndex = open + 4;
+      const match = end.exec(source);
+      at = match ? end.lastIndex : source.length;
+      continue;
+    }
+    // Only a name immediately after < or </ starts an element. In raw text,
+    // unrelated < characters must not swallow the real closing tag later.
+    const tag = /^<(\/?)([a-z][a-z0-9:-]*)(?=[\t\n\f\r />])/i.exec(source.slice(open));
+    if (!tag) {
+      if (!rawTag) emit('<');
+      at = open + 1;
+      continue;
+    }
+    const closing = Boolean(tag[1]);
+    const name = tag[2].toLowerCase();
+    if (rawTag && (!closing || name !== rawTag)) {
+      at = open + 1;
+      continue;
+    }
+    let quote = null;
+    let end = open + tag[0].length;
+    for (; end < source.length; end++) {
+      const char = source[end];
+      if (quote) {
+        if (char === quote) quote = null;
+      } else if (char === '"' || char === "'") quote = char;
+      else if (char === '>') break;
+    }
+    if (end === source.length) break;
+    at = end + 1;
+    if (rawTag) {
+      rawTag = null;
+      emit(' ');
+    } else if (!closing && (name === 'script' || name === 'style')) {
+      rawTag = name;
+      emit(' ');
+    } else if (/^h[1-6]$/.test(name)) {
+      endHeading();
+      if (!closing) heading = { level: Number(name[1]), parts: [] };
+    } else if (['br', 'p', 'li', 'div', 'ul', 'ol', 'section', 'article', 'header', 'footer', 'table', 'tr', 'td', 'th', 'dl', 'dt', 'dd', 'hr'].includes(name)) {
+      emit('\n');
+    }
+    // Inline tags contribute no separator: Post<strong>gre</strong>SQL is
+    // one word. Whitespace already present in the text is preserved.
+  }
+  endHeading();
+  return output.join('').split('\n').map(line => htmlToText(line)).join('\n');
+}
+
 /**
- * Core coverage analysis. Pure: no I/O. `thin` is a SUBSET of `present`
- * (keywords mentioned exactly once); coverage counts thin keywords as present.
+ * CV skills not named by any JD keyword. This is a review list, never a score.
+ * Read explicit Skills / Core Competencies sections, not terms inferred from
+ * experience prose. Keep the CV's spelling, including non-vocabulary skills.
+ *
+ * @param {string[]} keywords
+ * @param {string} cvText - Markdown, or HTML when options.html is true.
+ * @param {{html?: boolean}} [options]
+ * @returns {string[]}
+ */
+export function cvTermsNotInJd(keywords, cvText, { html = false } = {}) {
+  const text = html ? cvHtmlSections(cvText) : collapseMarkdownLinks(
+    String(cvText || '').replace(/<!--[\s\S]*?-->/g, ' '));
+  const terms = new Map();
+  let skillsLevel = null;
+  let fence = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = normalizePandocLine(raw).trim();
+    const marker = /^(`{3,}|~{3,})/.exec(line);
+    if (marker) {
+      const run = marker[1].trim();
+      if (!fence) fence = run;
+      else if (run[0] === fence[0] && run.length >= fence.length && !line.slice(run.length).trim()) fence = null;
+      continue;
+    }
+    if (fence) continue;
+    const headingMarker = /^(#{1,6})\s/.exec(line);
+    if (headingMarker) {
+      const level = headingMarker[1].length;
+      const heading = headingText(line, level);
+      if (/^(?:skills?|technical skills|core competencies|competencies)$/i.test(heading || '')) {
+        skillsLevel = skillsLevel === null ? level : Math.min(skillsLevel, level);
+      }
+      else if (skillsLevel !== null && level <= skillsLevel) skillsLevel = null;
+      continue;
+    }
+    if (skillsLevel === null || /^(?:[-*_]\s*){3,}$/.test(line)) continue;
+    const visible = line.replace(/^(?:[-*+]\s+|\d+[.)]\s+)/, '')
+      .replace(/(?<!\\)(\*\*|__)/g, '')
+      .replace(/(`+)([^`]+)\1/g, '$2')
+      .replace(/(?<![\w\\])([*_])(?=\S)(.+?\S|\S)\1(?!\w)/g, '$2');
+    const items = toPlainText(visible).replace(/^[^:]+:\s*/, '');
+    for (const item of splitCvSkillTerms(items)) {
+      const term = item.trim();
+      const key = normalizeText(term);
+      if (key && !terms.has(key)) terms.set(key, term);
+    }
+  }
+  // The review is the opposite direction from coverage: is this CV term
+  // named within any one JD keyword? Do not join distinct JD keywords.
+  return [...terms.values()].filter(term =>
+    !keywords.some(keyword => keywordCount(term, keyword) > 0));
+}
+
+/**
+ * Core coverage analysis. Pure: no I/O. One occurrence counts as present.
  *
  * @param {string[]} keywords - JD keywords (order preserved, case-insensitively de-duped).
  * @param {string} cvText - Raw CV text to scan.
  * @returns {{total:number, presentCount:number, coveragePct:number,
- *            present:string[], thin:string[], missing:string[]}}
+ *            present:string[], missing:string[]}}
  */
 export function analyzeCoverage(keywords, cvText) {
   const seen = new Set();
@@ -167,22 +315,16 @@ export function analyzeCoverage(keywords, cvText) {
   }
 
   const present = [];
-  const thin = [];
   const missing = [];
   for (const k of cleaned) {
-    const count = keywordCount(k, cvText || '');
-    if (count === 0) {
-      missing.push(k);
-    } else {
-      present.push(k);
-      if (count === 1) thin.push(k);
-    }
+    if (keywordCount(k, cvText || '') > 0) present.push(k);
+    else missing.push(k);
   }
 
   const total = cleaned.length;
   const presentCount = present.length;
   const coveragePct = total === 0 ? 0 : Math.round((presentCount / total) * 100);
-  return { total, presentCount, coveragePct, present, thin, missing };
+  return { total, presentCount, coveragePct, present, missing };
 }
 
 /**
@@ -447,7 +589,7 @@ export function htmlToText(html) {
     // tolerate whitespace in the closing tag — a stricter filter CodeQL accepts.
     .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+    .replace(/<([^>]*)(>?)/g, (tag, body, close) => (close && body ? ' ' : tag))
     .replace(/&nbsp;/gi, ' ')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
@@ -463,12 +605,12 @@ export function htmlToText(html) {
 /**
  * Render an analyzeCoverage() result as a ready-to-paste report section.
  *
- * @param {ReturnType<typeof analyzeCoverage>} result - Coverage result.
+ * @param {ReturnType<typeof analyzeCoverage> & {cvTermsNotInJd?: string[]}} result - Coverage result.
  * @param {string} [sourceLabel] - Human label for the scanned document.
  * @returns {string} Markdown block.
  */
 export function formatCoverageMarkdown(result, sourceLabel, keywordNote) {
-  const { coveragePct, presentCount, total, present, thin, missing } = result;
+  const { coveragePct, presentCount, total, present, missing } = result;
   const out = [
     '## Keyword Coverage',
     '',
@@ -478,16 +620,25 @@ export function formatCoverageMarkdown(result, sourceLabel, keywordNote) {
   if (sourceLabel) out.push(`_Scanned: ${sourceLabel}._`, '');
   if (keywordNote) out.push(`_${keywordNote}_`, '');
   out.push(`**Present (${present.length}):** ${present.join(', ') || '—'}`, '');
-  if (thin.length) {
-    out.push(`**Thin — mentioned once, consider reinforcing (${thin.length}):** ${thin.join(', ')}`, '');
-  }
   out.push(
     `**Missing (${missing.length}):** ${missing.join(', ') || '—'}`,
+    '',
+    'Missing means the keyword was not matched by this check. Your CV may describe the skill in other words.',
     '',
     '> Diagnostic only. Add a missing keyword **only** if it reflects real ' +
       'experience — reformulated from your background, never fabricated.',
     '',
   );
+  if (Array.isArray(result.cvTermsNotInJd)) {
+    out.push(
+      '### In your CV, not named in this JD (review, keep the differentiators)',
+      '',
+      result.cvTermsNotInJd.join(', ') || 'None found in the recognized skills / competencies sections.',
+      '',
+      'Informational only. These terms do not change coverage. Keep relevant strengths even when the JD does not name them.',
+      '',
+    );
+  }
   return out.join('\n');
 }
 
@@ -713,37 +864,24 @@ export function parseMatchArgs(argv) {
 }
 
 /**
+ * A refusal the CLI prints and exits 1 on. It is thrown rather than followed
+ * by process.exit(1) because it can come right after the --url request, and
+ * on Windows Node 24 aborts when process.exit() runs right after a request
+ * (nodejs/node#56645, the crash in #3788): it prints a libuv assertion and
+ * exits with a crash code instead of 1. The entry point prints the message
+ * and sets process.exitCode. The refusals before any request keep
+ * process.exit().
+ */
+class KeywordMatchRefusal extends Error {}
+
+/**
  * @param {string} sourceLabel
  * @returns {never}
  */
 function refuseNoSkills(sourceLabel) {
-  console.error(`No known skills found in JD text from ${sourceLabel}. ${REFUSE_BETTER_SOURCE}`);
-  process.exit(1);
+  throw new KeywordMatchRefusal(`No known skills found in JD text from ${sourceLabel}. ${REFUSE_BETTER_SOURCE}`);
 }
 
-/**
- * A relative report, CV or JD-text path, resolved the way the modes write it.
- * The modes pass `reports/{###}-….md` and `jds/{slug}.md` relative to the data
- * root, which is not the process's working directory when the user layer lives
- * elsewhere (a `.career-ops-data` marker or CAREER_OPS_ROOT).
- *
- * A bare relative path therefore always means the data root, whether or not
- * the file is there. Falling back to the working directory when the data root
- * lacks the file would score a stale copy left in the checkout (say, from
- * before the user layer moved out) instead of saying the report is missing.
- * A path that starts with `./` or `../` names the working directory on
- * purpose, so it resolves there. With no data root, the working directory is
- * used, as before.
- *
- * @param {string} arg
- * @param {string} root
- * @returns {string}
- */
-export function resolveUserPath(arg, root) {
-  if (isAbsolute(arg)) return arg;
-  if (!root || /^\.\.?(?:[\\/]|$)/.test(arg)) return join(process.cwd(), arg);
-  return join(root, arg);
-}
 
 /**
  * Resolve keywords + provenance for any MatchInput.
@@ -757,10 +895,7 @@ export function resolveUserPath(arg, root) {
 export async function resolveKeywords(input, root) {
   if (input.kind === 'url') {
     const body = await resolveUrlJdBody(input.url);
-    if (!body.ok) {
-      console.error(body.message);
-      process.exit(1);
-    }
+    if (!body.ok) throw new KeywordMatchRefusal(body.message);
     const keywords = keywordsFromJdText(body.text);
     if (!keywords.length) refuseNoSkills(input.url);
     return {
@@ -849,7 +984,6 @@ function runSelfTest() {
 
   const failures = [];
   if (!r.present.includes('Python')) failures.push('exact hit (Python)');
-  if (r.thin.includes('Python')) failures.push('Python (count 2) must not be thin');
   if (!r.present.includes('Kubernetes')) failures.push('synonym k8s->Kubernetes');
   if (!r.present.includes('Machine Learning')) failures.push('case/space variant');
   if (!r.present.includes('C++')) failures.push('symbol keyword C++');
@@ -858,7 +992,7 @@ function runSelfTest() {
   if (r.present.includes('Java')) failures.push('word boundary (Java matched JavaScript)');
   if (!r.missing.includes('Java')) failures.push('Java should be missing');
   if (!r.missing.includes('gRPC')) failures.push('gRPC should be missing');
-  if (!r.thin.includes('observability')) failures.push('observability should be thin');
+  if (!r.present.includes('observability')) failures.push('one mention of observability must count as present');
   if (r.coveragePct !== 80) failures.push(`coverage % = ${r.coveragePct} (expected 80)`);
   if (variantForms('aws').includes('aw')) failures.push('variantForms truncated acronym aws->aw');
   if (htmlToText('<style>.x{}</style><p>Python &amp; <b>gRPC</b></p>') !== 'Python & gRPC') {
@@ -923,17 +1057,16 @@ async function runKeywordMatch(args) {
     ? resolveUserPath(cvArg, getCareerOpsRoot())
     : join(getCareerOpsRoot(), 'cv.md');
 
+  // Thrown, not process.exit(1): with --url this runs after the request.
   if (!existsSync(cvPath) || !statSync(cvPath).isFile()) {
-    console.error(`CV not found: ${cvPath}. Pass --cv <path> to point at your CV.`);
-    process.exit(1);
+    throw new KeywordMatchRefusal(`CV not found: ${cvPath}. Pass --cv <path> to point at your CV.`);
   }
 
   let rawCv;
   try {
     rawCv = readFileSync(cvPath, 'utf-8');
   } catch {
-    console.error(`Unable to read CV: ${cvPath}`);
-    process.exit(1);
+    throw new KeywordMatchRefusal(`Unable to read CV: ${cvPath}`);
   }
   // The words a reader sees. htmlToText() already drops an HTML CV's hrefs; a
   // markdown CV kept its link targets, so "[modules](https://…/terraform-modules)"
@@ -941,7 +1074,10 @@ async function runKeywordMatch(args) {
   const cvText = /\.html?$/i.test(cvPath) ? htmlToText(rawCv) : collapseMarkdownLinks(rawCv);
   const sourceLabel = cvArg ? basename(cvPath) : 'cv.md (base CV, before per-role tailoring)';
 
-  const result = analyzeCoverage(keywords, cvText);
+  const result = {
+    ...analyzeCoverage(keywords, cvText),
+    cvTermsNotInJd: cvTermsNotInJd(keywords, rawCv, { html: /\.html?$/i.test(cvPath) }),
+  };
   const payload = {
     ...result,
     keywordSource,
@@ -966,7 +1102,10 @@ if (isMainModule(import.meta.url)) {
     process.exit(1);
   }
   runKeywordMatch(args).catch((err) => {
-    console.error(`keyword-match: unexpected error — ${err?.message || err}`);
-    process.exit(1);
+    console.error(err instanceof KeywordMatchRefusal
+      ? err.message
+      : `keyword-match: unexpected error — ${err?.message || err}`);
+    // process.exitCode, not process.exit(1), for the reason given at KeywordMatchRefusal.
+    process.exitCode = 1;
   });
 }

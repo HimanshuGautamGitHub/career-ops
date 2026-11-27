@@ -217,6 +217,22 @@ try {
   if (getroLocations[0]?.location === 'Zurich, Bern, Remote') pass('getro.fetch() joins multiple locations and appends a Remote tag from work_mode');
   else fail(`getro.fetch() location = ${JSON.stringify(getroLocations[0]?.location)}`);
 
+  // workplaceType comes from work_mode ("remote" | "on_site"); anything else leaves it unset.
+  const getroModes = await getro.fetch(okEntry, {
+    fetchJson: async () => ({
+      results: {
+        count: 4,
+        jobs: ['remote', 'on_site', 'flexible', null].map((work_mode, i) => ({ title: `Eng ${i}`, url: `https://jobs.examplevc.example/wm${i}`, organization: { name: 'Acme' }, locations: ['Zurich'], work_mode })),
+      },
+    }),
+  });
+  if (getroModes[0]?.workplaceType === 'remote')
+    pass('getro.fetch() sets workplaceType remote from work_mode "remote"');
+  else fail(`getro.fetch() workplaceType = ${JSON.stringify(getroModes.map((j) => j.workplaceType))}`);
+  if (getroModes.length === 4 && getroModes.slice(1).every((j) => j && !('workplaceType' in j)))
+    pass('getro.fetch() leaves workplaceType unset for on_site, an unknown or a null work_mode');
+  else fail(`getro.fetch() other work_mode = ${JSON.stringify(getroModes.slice(1).map((j) => j.workplaceType))}`);
+
   // Salary is extracted from the cents fields when the compensation_period is annual.
   const getroSalary = await getro.fetch(okEntry, {
     fetchJson: async () => ({
@@ -345,7 +361,7 @@ try {
     } finally {
       console.error = origError;
     }
-    return { calls, jobs: jobsOut.length, warnings, capWarnings: warnings.filter((w) => w.includes('getro_max_pages')) };
+    return { calls, jobs: jobsOut.length, truncated: jobsOut.truncated, warnings, capWarnings: warnings.filter((w) => w.includes('getro_max_pages')) };
   };
 
   const capHit = await capRun({ getro_max_pages: 2 }, { count: 100, pages: 5 });
@@ -355,6 +371,9 @@ try {
   } else {
     fail(`getro.fetch() cap warning: ${capHit.calls} pages, warnings ${JSON.stringify(capHit.capWarnings)}`);
   }
+  // Each warned stop is also marked, so scan.mjs logs the board partial, not reachable.
+  if (capHit.truncated?.reason === 'page-cap' && capHit.truncated.fetched === 40) pass('getro.fetch() marks the board page-cap when getro_max_pages ends the walk with postings left');
+  else fail(`getro.fetch() cap cut: truncated = ${JSON.stringify(capHit.truncated)}`);
 
   // At the hard cap, raising getro_max_pages reads nothing more, so the warning
   // must not tell the user to; below it, it does.
@@ -375,6 +394,11 @@ try {
     pass('getro.fetch() does not warn when the board ends at the cap, a ctx.maxPages probe cuts it, or the age cutoff ends the last page');
   } else {
     fail(`getro.fetch() cap warning misfired: exact ${capExact.capWarnings.length}, probe ${capProbe.capWarnings.length}, aged ${capAged.capWarnings.length}`);
+  }
+  if (capExact.truncated === undefined && capProbe.truncated === undefined && capAged.truncated === undefined) {
+    pass('getro.fetch() leaves the board unmarked when it ends at the cap, a probe cuts it, or the age cutoff ends it');
+  } else {
+    fail(`getro.fetch() unwarned stops were marked: exact ${JSON.stringify(capExact.truncated)}, probe ${JSON.stringify(capProbe.truncated)}, aged ${JSON.stringify(capAged.truncated)}`);
   }
 
   // A short last page means the board ended there, even when the count is
@@ -399,6 +423,11 @@ try {
     pass('getro.fetch() does not warn on the cap when a probe cap equals it, or when the last allowed page fails');
   } else {
     fail(`getro.fetch() cap warning: probe=cap ${capProbeEqual.capWarnings.length} (${capProbeEqual.calls} calls), failed last page ${capFailLast.capWarnings.length} (${capFailLast.jobs} jobs, ${JSON.stringify(capFailLast.warnings)})`);
+  }
+  if (capFailLast.truncated?.reason === 'fetch-error' && capFailLast.truncated.fetched === 20 && capProbeEqual.truncated === undefined) {
+    pass('getro.fetch() marks a failed later page fetch-error, and leaves a probe cut at the cap unmarked');
+  } else {
+    fail(`getro.fetch() failed last page: truncated = ${JSON.stringify(capFailLast.truncated)}, probe=cap ${JSON.stringify(capProbeEqual.truncated)}`);
   }
 
   // A transient failure (timeout/abort — no .status set, matching a real AbortError)

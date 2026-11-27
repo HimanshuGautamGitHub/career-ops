@@ -16,6 +16,7 @@ import {
   type RoleType,
   type WorkSetup,
 } from "@/lib/explore";
+import { commitsOnPaste, commitsOnType, splitChipText } from "@/lib/chip-text.mjs";
 
 import { flushDraftsIntoFilters } from "@/lib/draft-flush.mjs";
 import { CHINA_PRESET, CHINA_SOURCES, EMPLOYER_LABEL } from "@/lib/employer-preset.mjs";
@@ -47,6 +48,7 @@ function KeywordField({
   tone,
   placeholder,
   ariaLabel,
+  describedBy,
   onChange,
   suggestions,
   draft,
@@ -56,6 +58,7 @@ function KeywordField({
   tone: "inc" | "exc";
   placeholder: string;
   ariaLabel?: string;
+  describedBy?: string;
   onChange: (v: string[]) => void;
   /** Optional native-datalist typeahead. Used by the location field to offer
    *  disambiguated "City, Country" options (AGEN-254) while staying free-text —
@@ -73,9 +76,9 @@ function KeywordField({
   // Split only on UNAMBIGUOUS item separators (comma / newline / semicolon) — never
   // bare spaces, which are legitimate inside multi-word entries ("AI platform",
   // "New York", "Costa Rica"). A space-only paste stays one chip on purpose (#1147).
+  // An entry in double quotes keeps its separators: "Portland, OR" is one chip (#7424).
   const commit = (text: string) => {
-    const parts = text.split(/[,\n;\t\r]+/);
-    const next = cleanChips([...values, ...parts]);
+    const next = cleanChips([...values, ...splitChipText(text)]);
     onChange(next);
     onDraftChange("");
   };
@@ -93,13 +96,14 @@ function KeywordField({
       <input
         aria-label={ariaLabel}
         list={suggestions?.length ? listId : undefined}
+        aria-describedby={describedBy}
         value={draft}
         onChange={(e) => {
           const val = e.target.value;
           // A datalist pick fires onChange with the full chosen value but no
           // trailing separator, so commit it straight to a chip.
           if (suggestions?.includes(val)) commit(val);
-          else if (/[,\n;\t\r]$/.test(val)) commit(val);
+          else if (commitsOnType(val)) commit(val);
           else onDraftChange(val);
         }}
         onKeyDown={(e) => {
@@ -114,10 +118,10 @@ function KeywordField({
           e.preventDefault();
           const text = e.clipboardData.getData("text");
           const merged = draft + text;
-          // Only commit to chips when the paste contains item separators.
-          // A plain-text paste (e.g. pasting "-EMEA" after typing "Remote")
-          // stays in the input field so the user can keep editing.
-          if (/[,;\n\t\r]/.test(text)) commit(merged);
+          // Only commit to chips when the paste contains item separators
+          // outside quotes. A plain-text paste (e.g. pasting "-EMEA" after
+          // typing "Remote") stays in the input field so the user can keep editing.
+          if (commitsOnPaste(merged)) commit(merged);
           else onDraftChange(merged);
         }}
         onBlur={() => draft.trim() && commit(draft)}
@@ -132,6 +136,16 @@ function KeywordField({
       ) : null}
     </div>
   );
+}
+
+// A comma ends an entry unless the entry is quoted (#7424). The placeholder shows
+// that only while a box is empty, so the rule is also stated under the boxes, and
+// each location box names its hint in aria-describedby so a screen reader reads it.
+const QUOTE_HINT_CITY = "explore-quote-hint-city";
+const QUOTE_HINT_MORE = "explore-quote-hint-more";
+
+function QuoteHint({ id }: { id: string }) {
+  return <p id={id} className="mt-1 text-[11px] text-faint">An entry with a comma goes in double quotes: &quot;Portland, OR&quot;.</p>;
 }
 
 function Label({ children, hint }: { children: React.ReactNode; hint?: string }) {
@@ -242,11 +256,13 @@ export function FilterBuilder({
           {...draftProps("allow")}
           values={filters.allow}
           tone="inc"
-          placeholder="Hyderabad, India · New York · Remote…"
+          placeholder='Toronto, "Portland, OR", Remote…'
           ariaLabel="City or location"
           suggestions={CITY_SUGGESTIONS}
+          describedBy={QUOTE_HINT_CITY}
           onChange={(v) => set({ allow: v })}
         />
+        <QuoteHint id={QUOTE_HINT_CITY} />
       </div>
 
       {!employer && (
@@ -364,16 +380,17 @@ export function FilterBuilder({
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label hint="rescues a multi-location posting">Always include</Label>
-              <KeywordField {...draftProps("alwaysAllow")} ariaLabel="Always include" values={filters.alwaysAllow} tone="inc" placeholder="Toronto…" onChange={(v) => set({ alwaysAllow: v })} />
+              <KeywordField {...draftProps("alwaysAllow")} ariaLabel="Always include" describedBy={QUOTE_HINT_MORE} values={filters.alwaysAllow} tone="inc" placeholder="Toronto…" onChange={(v) => set({ alwaysAllow: v })} />
             </div>
             <div>
               <Label hint="unless Always include also matches">Exclude locations</Label>
-              <KeywordField {...draftProps("block")} ariaLabel="Exclude locations" values={filters.block} tone="exc" placeholder="India…" onChange={(v) => set({ block: v })} />
+              <KeywordField {...draftProps("block")} ariaLabel="Exclude locations" describedBy={QUOTE_HINT_MORE} values={filters.block} tone="exc" placeholder="India…" onChange={(v) => set({ block: v })} />
             </div>
           </div>
           <div>
             <Label hint="hard reject — overrides Always include">Never include</Label>
-            <KeywordField {...draftProps("blockHard")} ariaLabel="Never include" values={filters.blockHard} tone="exc" placeholder="USA, Brazil…" onChange={(v) => set({ blockHard: v })} />
+            <KeywordField {...draftProps("blockHard")} ariaLabel="Never include" describedBy={QUOTE_HINT_MORE} values={filters.blockHard} tone="exc" placeholder="USA, Brazil…" onChange={(v) => set({ blockHard: v })} />
+            <QuoteHint id={QUOTE_HINT_MORE} />
           </div>
           <div>
             <Label hint={`${filters.limitPerAts} companies / source`}>Scan depth</Label>
