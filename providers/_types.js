@@ -23,8 +23,10 @@
  * @property {string} location May be empty.
  * @property {'remote' | 'hybrid' | 'onsite'} [workplaceType]
  *                               Workplace model, populated ONLY when the source
- *                               exposes a dedicated field (`ashby.mjs` and
- *                               `lever.mjs` are producers; most providers omit it).
+ *                               exposes a dedicated field (`ashby.mjs`, `lever.mjs`,
+ *                               `getro.mjs`, `a16z-speedrun-talent.mjs` and
+ *                               `consider.mjs`, from its `remote` and `hybrid`
+ *                               flags, are producers; most providers omit it).
  *                               Normalized to lowercase: 'remote' | 'hybrid' | 'onsite'.
  *                               Never inferred from location text, title, or
  *                               `isRemote`. Omitted when unknown or unspecified.
@@ -34,7 +36,9 @@
  *                               or work models. Omitted when empty.
  * @property {string} [country]  The source's country code when it exposes a
  *                               dedicated field (Lever's `country`), trimmed but
- *                               otherwise as given. Omitted when absent or null.
+ *                               otherwise as given. We Work Remotely gives the
+ *                               flag in `<country>`, read as its ISO code.
+ *                               Omitted when absent or null.
  * @property {string} [description] Job description text, populated ONLY when the
  *                               provider's list payload carries it for free (no
  *                               extra per-job request — the scanner is zero-token),
@@ -69,6 +73,40 @@
  *                               `description`; content_filter and
  *                               country_eligibility_filter never read it.
  *                               Omitted when the source has no such text.
+ * @property {'full_time'|'part_time'|'contract'|'temporary'|'internship'} [employmentType]
+ *                               The posting's employment type, normalized by
+ *                               `normalizeEmploymentType()` in
+ *                               `_employment-type.mjs` from the source's own
+ *                               field; templates/portals.example.yml
+ *                               (employment_type_filter) lists the providers
+ *                               that set it and the field each reads.
+ *                               Set ONLY from a dedicated field, never read out
+ *                               of the title or description. Omitted when the
+ *                               source has no such field or its value names no
+ *                               known type ("Volunteer", "Other", "Permanent").
+ *                               Spread `...employmentTypeField(raw)` into a Job
+ *                               literal to get that. Read by scan.mjs's
+ *                               employment_type_filter and written to
+ *                               scan-history.tsv's `employment_type` column.
+ * @property {string} [department] The department name the source gives in a
+ *                               dedicated field: Ashby posting API
+ *                               `department`, Lever `categories.department`,
+ *                               Greenhouse `departments[].name`, Workable
+ *                               widget `department`, SmartRecruiters
+ *                               `department.label`, Recruitee `department`.
+ *                               Whitespace runs collapse to one space and the
+ *                               ends are trimmed. When the source lists several
+ *                               (Greenhouse), the distinct names, sorted, joined
+ *                               with " · ". Set ONLY from a dedicated field,
+ *                               never read out of the title or description.
+ *                               Omitted when the source has no such field or
+ *                               its value is not a non-empty string. Spread
+ *                               `...departmentTeamFields(department, team)`
+ *                               from `_department-team.mjs` into a Job literal.
+ * @property {string} [team]     The team name the source gives in a dedicated
+ *                               field: Ashby posting API `team`, Lever
+ *                               `categories.team`. Normalized and omitted as
+ *                               `department` is.
  * @property {number} [postedAt] Epoch ms when the posting was published.
  *                               Omitted when the source doesn't expose a
  *                               usable date. scan.mjs ignores it; consumers
@@ -256,6 +294,7 @@
  * @property {(string|null)}         [body]
  * @property {('error'|'follow'|'manual')} [redirect]
  * @property {number}                [maxBytes] Response-body ceiling for fetchJson/fetchText; defaults to _http.mjs DEFAULT_MAX_BODY_BYTES. Over-cap throws `code: 'response_too_large'`.
+ * @property {(res: { status: number, headers: Headers }) => void} [onResponse] Called with the response (status and headers) before the body is read, including on a non-2xx just before it throws. themuse.mjs reads `cf-mitigated` this way.
  */
 
 /**
@@ -322,7 +361,12 @@
  *   Hostname that fetch() requests, when that host is not detect().url.
  *   scan.mjs uses the string as the per-host concurrency key. Omit it when
  *   detect().url, api, or careers_url already names that host.
- * @property {(entry: PortalEntry, ctx: Context) => Promise<Job[]>} fetch      Required.
+ * @property {{limit: number}} [fetchConcurrencyGroup]                      Optional.
+ *   A parallel board scan limit shared by every entry for this provider,
+ *   including entries that use different hostnames.
+ * @property {(entry: PortalEntry, ctx: Context) => Promise<Job[] & {queryScope?: {config: string, queries: string[]}}>} fetch
+ *   Required. Attach queryScope when the returned jobs cover keyword queries
+ *   only, even when every query was read to completion.
  * @property {((job: Job) => (string | null))} [dedupKey]                     Optional. A
  *   provider-scoped identifier for a job, precise where URL normalization
  *   isn't — e.g. a Workday requisition ID, so the same posting served under

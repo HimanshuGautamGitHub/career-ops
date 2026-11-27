@@ -8,7 +8,7 @@
  * copies — and every writer excludes every other writer through the same lock.
  */
 
-import { readFileSync, writeFileSync, renameSync, rmSync, statSync, lstatSync, existsSync, realpathSync, readlinkSync, accessSync, constants as fsConstants, chmodSync, appendFileSync, openSync, fstatSync, readSync, closeSync, copyFileSync } from 'fs';
+import { readFileSync, writeFileSync, rmSync, statSync, lstatSync, existsSync, realpathSync, readlinkSync, accessSync, constants as fsConstants, chmodSync, appendFileSync, openSync, fstatSync, readSync, closeSync, copyFileSync, truncateSync } from 'fs';
 import { join, dirname, basename, resolve, relative, isAbsolute, sep } from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { tmpdir } from 'os';
@@ -16,6 +16,10 @@ import { loadYaml } from './lib/yaml-document.mjs';
 // The lock protocol is lib/dir-lock.mjs, shared with every other core lock.
 // This module only picks the tracker's lock directory, timing and error.
 import { acquireDirLock } from './lib/dir-lock.mjs';
+// The Windows rename retry (#3006) lives in a dependency-free module so
+// plugins/_lock.mjs can use it without loading js-yaml through this file.
+import { renameSyncWithRetry } from './lib/rename-retry.mjs';
+export { RENAME_RETRY_DELAYS_MS, isRenameContention, renameSyncWithRetry } from './lib/rename-retry.mjs';
 import { normalizeTextKey, firstLinkTarget, unwrapReportUrlToken } from './tracker-parse.mjs';
 
 /**
@@ -312,6 +316,14 @@ export function companiesMatchIgnoringCorporateForm(a, b, formWords = CORPORATE_
  * substantive token. An empty stem is the blind-employer `?` marker and every
  * other punctuation-only cell, which must never match a named employer.
  *
+ * A dotted initialism in the tail ("L.L.C.", "S.A.", "G.m.b.H.") tokenizes to
+ * one letter per token, since normalizeTextKey() turns each dot into a
+ * separator. collapseInitialisms() joins each run of single-letter tokens back
+ * into one word, and the tail check applies to that word, so "Acme L.L.C."
+ * matches "Acme" the way "Acme LLC" does. A run that does not spell a form
+ * word ("Acme X Y" → "xy") still fails. Only the tail is collapsed: the stem
+ * must still be a token-for-token prefix of the longer name.
+ *
  * @param {string[]} ta - Tokens of one company cell.
  * @param {string[]} tb - Tokens of the other company cell.
  * @param {Set<string>} [formWords] - Same override as companiesMatchIgnoringCorporateForm.
@@ -322,7 +334,26 @@ export function corporateFormTokensMatch(ta, tb, formWords = CORPORATE_FORM_WORD
   if (stem.length === 0 || stem.length === full.length) return false;
   if (stem.join('').length < MIN_STEM_CHARS) return false;
   if (stem.some((token, i) => token !== full[i])) return false;
-  return full.slice(stem.length).every(token => formWords.has(token));
+  return collapseInitialisms(full.slice(stem.length)).every(token => formWords.has(token));
+}
+
+// Joins each run of single-character tokens into one token: ['l', 'l', 'c'] →
+// ['llc'], ['g', 'm', 'b', 'h', 'holdings'] → ['gmbh', 'holdings']. Longer
+// tokens pass through unchanged.
+function collapseInitialisms(tokens) {
+  const out = [];
+  let run = '';
+  for (const token of tokens) {
+    if ([...token].length === 1) {
+      run += token;
+      continue;
+    }
+    if (run) out.push(run);
+    run = '';
+    out.push(token);
+  }
+  if (run) out.push(run);
+  return out;
 }
 
 /**
@@ -697,74 +728,6 @@ export async function openTrackerTransaction(appsFile, options = {}) {
 }
 
 /**
- * Codes Windows raises when a rename-over-existing-file loses a race for the
- * destination handle. Same portability gap this module already documents for
- * mkdir/rm (#2777): POSIX `rename(2)` atomically replaces the destination and
- * cannot fail this way, so these never fire on Linux/macOS.
- */
-const RENAME_CONTENTION_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
-
-/** Backoff schedule for a contended rename. Worst case ~193ms, then rethrow. */
-export const RENAME_RETRY_DELAYS_MS = [1, 2, 5, 10, 25, 50, 100];
-
-/**
- * Is this error Windows saying "the destination is busy right now"?
- *
- * Exported for the same reason `lib/dir-lock.mjs` exports `isMkdirContention`
- * and `isRmContention`: one definition, testable, and no second copy to drift.
- *
- * @param {unknown} err - Error thrown by a rename attempt.
- * @returns {boolean} True when the rename should be retried.
- */
-export function isRenameContention(err) {
-  return RENAME_CONTENTION_CODES.has(err?.code);
-}
-
-/**
- * Block the current thread for `ms` without an event-loop turn.
- *
- * `writeFileAtomic` is synchronous by contract (every tracker writer calls it
- * inside a held lock), so the backoff cannot be a promise.
- *
- * @param {number} ms - Milliseconds to sleep.
- * @returns {void}
- */
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * `renameSync` that survives Windows contention for the destination handle.
- *
- * Windows refuses a rename whose destination is open by anyone else at that
- * instant, and answers EPERM/EACCES/EBUSY. The holder is usually not another
- * writer of ours (they are serialized by the tracker lock) but a transient
- * reader: an antivirus scanner, the Search indexer, or a concurrent
- * `readFileSync` from a reporting script. The handle is released in
- * milliseconds, so a short backoff converts a lost write into a completed one.
- *
- * This mirrors `isMkdirContention` / `isRmContention` in lib/dir-lock.mjs.
- * Same reasoning as #2777: treating portable-looking contention as fatal is how
- * a write gets LOST, and the tracker is the canonical store.
- *
- * @param {string} tmpPath - Source path (the fully written temporary file).
- * @param {string} path - Destination path to replace.
- * @param {(from: string, to: string) => void} [rename] - Injectable rename, for tests.
- * @returns {void}
- */
-export function renameSyncWithRetry(tmpPath, path, rename = renameSync) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      rename(tmpPath, path);
-      return;
-    } catch (err) {
-      if (!isRenameContention(err) || attempt >= RENAME_RETRY_DELAYS_MS.length) throw err;
-      sleepSync(RENAME_RETRY_DELAYS_MS[attempt]);
-    }
-  }
-}
-
-/**
  * Replace a tracker file atomically using a same-directory temporary file.
  *
  * Writing into the same directory keeps the final rename atomic on normal
@@ -892,15 +855,23 @@ export function userFileWriteTarget(path) {
  */
 export function appendLedgerRows(path, text) {
   let lead = '';
+  let before = 0;
+  let existed = false;
   let fd;
   try {
     fd = openSync(path, 'r');
-  } catch {
-    fd = null; // no file yet: the append below creates it
+    existed = true;
+  } catch (err) {
+    // Only a missing file starts at size 0. Any other read failure, such as a
+    // ledger that is writable but not readable, must stop here. Treating it as
+    // missing would truncate the real file to empty when the append then fails.
+    if (err?.code !== 'ENOENT') throw err;
+    fd = null;
   }
   if (fd !== null) {
     try {
       const { size } = fstatSync(fd);
+      before = size;
       if (size > 0) {
         const last = Buffer.alloc(1);
         readSync(fd, last, 0, 1, size - 1);
@@ -910,7 +881,27 @@ export function appendLedgerRows(path, text) {
       closeSync(fd);
     }
   }
-  appendFileSync(path, lead + text, 'utf-8');
+  // appendFileSync can throw after the new bytes are already in the file, for
+  // example when the close fails. The caller reports the failure and may retry,
+  // which would record the same row again. Put the file back to the size it
+  // had before this append. A truncate that itself fails is reported: hiding it
+  // would leave the caller believing the ledger was unchanged.
+  try {
+    appendFileSync(path, lead + text, 'utf-8');
+  } catch (err) {
+    try {
+      truncateSync(path, before);
+    } catch (undoErr) {
+      if (undoErr?.code === 'ENOENT' && !existed) throw err;
+      const failure = new Error(
+        `${path}: the append failed (${err.code || err.message}) and the ledger could not be put back (${undoErr.code || undoErr.message})`,
+        { cause: err },
+      );
+      failure.code = undoErr.code;
+      throw failure;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -1039,6 +1030,16 @@ export function stripStatusDecoration(input) {
  */
 export function statusTextAfterDate(input) {
   return withoutBoldOrLeadingDate(input).match(STATUS_DATE_RE)?.[1].trim() ?? '';
+}
+
+/** Not checked as a real calendar day. That is the caller's job. */
+export function statusDateInCell(input) {
+  const raw = String(input ?? '').replace(/\*\*/g, '').trim();
+  const leading = raw.match(LEADING_STATUS_DATE_RE);
+  if (leading) return leading[0].slice(0, 10);
+  const matched = withoutBoldOrLeadingDate(input).match(STATUS_DATE_RE);
+  const date = matched?.[0].match(/\d{4}-\d{2}-\d{2}/);
+  return date ? date[0] : '';
 }
 
 /**

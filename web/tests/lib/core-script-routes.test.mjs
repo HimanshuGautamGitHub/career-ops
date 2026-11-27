@@ -150,9 +150,10 @@ test("the six analytics routes launch with process.execPath and windowsHide", as
   }
 });
 
-// Every route that calls execFile, found by reading the route tree. The two
-// tests above drive exactly these; a route added later that execFiles a core
-// script fails here until it is driven there too.
+// Every route that calls execFile, found by reading the route tree. The tests
+// above drive exactly these; a route added later that execFiles a core script
+// fails here until it is driven there too. version execFiles git rather than a
+// core script, so it is driven for the launch shape alone.
 const DRIVEN_ROUTES = [
   "company-history",
   "doctor",
@@ -164,7 +165,17 @@ const DRIVEN_ROUTES = [
   "quiet-companies",
   "stats",
   "upskill",
+  "version",
 ];
+
+test("version launches its git probe with windowsHide", async () => {
+  const { GET } = await route("version");
+  const { launches: made } = await call(GET);
+  assert.equal(made.length, 1, "version: one launch");
+  assert.equal(made[0].file, "git", "version: launched git");
+  assert.equal(made[0].script, "rev-parse", "version: asked for the short SHA");
+  assert.equal(made[0].options?.windowsHide, true, "version: launched with windowsHide");
+});
 
 test("census: the routes driven above are every route that calls execFile", () => {
   const apiRoot = fileURLToPath(new URL("../../src/app/api", import.meta.url));
@@ -180,7 +191,7 @@ test("census: the routes driven above are every route that calls execFile", () =
 // doctor: "the check didn't answer" is never "you're all set up".
 // ---------------------------------------------------------------------------
 
-const UNAVAILABLE = { available: false, onboardingNeeded: false, missing: [], warnings: [] };
+const UNAVAILABLE = { available: false, onboardingNeeded: false, missing: [], unpersonalized: [], warnings: [] };
 
 test("doctor reports unavailable when its child fails without output", async () => {
   // Given the doctor dies the way 0xC0000142 kills it: non-zero, nothing printed
@@ -218,16 +229,15 @@ test("doctor reports unavailable when the payload carries no onboarding verdict"
 test("doctor still relays a real verdict, including that onboarding is needed", async () => {
   // Given a healthy doctor that finds cv.md missing (a banner line before the
   // payload must not matter: the verdict is the last line)
-  standIn(
-    "doctor",
-    'console.log("banner");' +
-      'console.log(JSON.stringify({ onboardingNeeded: true, missing: ["cv.md"], warnings: ["w"] }));',
-  );
+  const unpersonalized = [{ path: "portals.yml", reason: "has no settings (empty or only comments)" }];
+  const verdict = { onboardingNeeded: true, missing: ["cv.md"], unpersonalized, warnings: ["w"] };
+  standIn("doctor", `console.log("banner"); console.log(JSON.stringify(${JSON.stringify(verdict)}));`);
   const { GET } = await route("doctor");
   assert.deepEqual((await call(GET)).body, {
     available: true,
     onboardingNeeded: true,
     missing: ["cv.md"],
+    unpersonalized,
     warnings: ["w"],
   });
 });

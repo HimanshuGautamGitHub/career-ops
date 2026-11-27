@@ -8,6 +8,7 @@ import { useJobs } from "@/components/jobs/job-store";
 import { CostBadge } from "@/components/cost/cost-badge";
 import { coverDraftButtonState } from "@/lib/pdf-button-state.mjs";
 import { COVER_TONES } from "@/lib/cover-tones.mjs";
+import { COVER_QUESTIONS, storedCoverBrief } from "@/lib/cover-answers.mjs";
 import { pipelineQuery } from "@/lib/pipeline-navigation.mjs";
 import { resolveCliId } from "@/lib/saved-cli";
 
@@ -15,16 +16,11 @@ import { resolveCliId } from "@/lib/saved-cli";
 // application. cover.md will not draft until the candidate answers its four
 // Step 6 prompts, so the button opens those questions first. The draft lands in
 // the run log. Rendering it to PDF is still the CLI's Step 9.
-const QUESTIONS = [
-  { name: "why", label: "Why this role or company?", hint: "One or two angles: scale, mission, stage, or what you would learn." },
-  { name: "problem", label: "What problem would you solve for them?", hint: "The research step checks this against what the company says publicly." },
-  { name: "approach", label: "How would you approach it on day one?", hint: "One or two sentences. This is the most specific part of the letter." },
-] as const;
 
 const fieldClass =
   "mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-brand/50 focus:outline-none disabled:opacity-60";
 
-type QuestionName = (typeof QUESTIONS)[number]["name"];
+type QuestionName = (typeof COVER_QUESTIONS)[number]["name"];
 type CoverBrief = Record<QuestionName, string> & { tone: string };
 
 const EMPTY_BRIEF: CoverBrief = { why: "", problem: "", approach: "", tone: "mirror" };
@@ -44,7 +40,7 @@ export function CoverDraftButton({ n, company }: { n: string; company: string })
   const listQuery = pipelineQuery(useSearchParams().toString());
   const jobQuery = listQuery ? `?${listQuery}` : "";
   const [open, setOpen] = useState(false);
-  const [brief, setBrief] = useState<CoverBrief>(EMPTY_BRIEF);
+  const [savedBrief, setSavedBrief] = useState<CoverBrief | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestMsg, setSuggestMsg] = useState<SuggestMessage | null>(null);
   const job = useMemo(
@@ -52,9 +48,24 @@ export function CoverDraftButton({ n, company }: { n: string; company: string })
     [jobs, n],
   );
   const state = coverDraftButtonState(job);
+  // The brief is lost when the user leaves the page, typically to read a failed
+  // run's log, so seed the controlled fields from what this session last submitted
+  // and fall back to the answers that run kept (#7441).
+  const prefill = savedBrief ?? storedCoverBrief(job?.brief);
+  const [brief, setBrief] = useState<CoverBrief>(() =>
+    prefill
+      ? {
+          why: prefill.why ?? "",
+          problem: prefill.problem ?? "",
+          approach: prefill.approach ?? "",
+          tone: prefill.tone ?? "mirror",
+        }
+      : EMPTY_BRIEF,
+  );
 
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setSavedBrief(brief);
     startJob({ title: `Cover letter · ${company}`, subtitle: "draft for this role", kind: "cover", input: n, page: `/pipeline/${n}`, brief });
     setOpen(false);
   };
@@ -171,7 +182,7 @@ export function CoverDraftButton({ n, company }: { n: string; company: string })
               </p>
             )}
           </div>
-          {QUESTIONS.map((q) => (
+          {COVER_QUESTIONS.map((q) => (
             <label key={q.name} className="mb-3 block text-sm font-medium text-foreground">
               {q.label}
               <span className="block text-xs font-normal text-muted">{q.hint}</span>
